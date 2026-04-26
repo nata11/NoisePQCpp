@@ -1,0 +1,74 @@
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite it as below."
+title: "NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography"
+version: "0.9.0"
+date-released: 2026-04-25
+authors:
+  - family-names: Ahmed
+    given-names: Nadeem
+url: "https://github.com/nata11/NoisePQCpp"
+repository-code: "https://github.com/nata11/NoisePQCpp"
+license: "Apache-2.0"
+license-url: "https://www.apache.org/licenses/LICENSE-2.0"
+keywords:
+  - cryptography
+  - noise protocol
+  - post-quantum cryptography
+  - C++23
+  - secure communications
+  - key exchange
+  - AEAD
+  - PQC
+  - ML-KEM
+  - ChaCha20-Poly1305
+abstract: >
+  NoisePQC++ is a modern, type-safe implementation of the Noise Protocol
+  Framework using C++23 modules with support for post-quantum cryptography
+  and hybrid forward secrecy. The library provides cryptographic protocol
+  building blocks including AEAD ciphers, hash functions, Diffie-Hellman key
+  exchange, and NIST-standardized ML-KEM for quantum-resistant key
+  encapsulation.
+preferred-citation:
+  type: software
+  authors:
+    - family-names: Ahmed
+      given-names: Nadeem
+  title: "NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography"
+  year: 2026
+  version: "0.9.0"
+  url: "https://github.com/nata11/NoisePQCpp"
+references:
+  - type: standard
+    title: "The Noise Protocol Framework"
+    authors:
+      - family-names: Perrin
+        given-names: Trevor
+    year: 2018
+    url: "https://noiseprotocol.org/noise.html"
+  - type: software
+    title: "Botan: Crypto and TLS for Modern C++"
+    url: "https://botan.randombit.net/"
+  - type: conference-paper
+    title: "CRYSTALS-Kyber: A CCA-Secure Module-Lattice-Based KEM"
+    authors:
+      - family-names: Bos
+        given-names: Joppe
+      - family-names: Ducas
+        given-names: Léo
+      - family-names: Kiltz
+        given-names: Eike
+      - family-names: Lepoint
+        given-names: Tancrède
+      - family-names: Lyubashevsky
+        given-names: Vadim
+      - family-names: Schanck
+        given-names: John M.
+      - family-names: Schwabe
+        given-names: Peter
+      - family-names: Seiler
+        given-names: Gregor
+      - family-names: Stehlé
+        given-names: Damien
+    conference: "IEEE European Symposium on Security and Privacy (EuroS&P)"
+    year: 2018
+    doi: "10.1109/EuroSP.2018.00032"

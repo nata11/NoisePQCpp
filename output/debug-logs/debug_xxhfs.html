@@ -1,0 +1,313 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<!-- This file was created with the aha Ansi HTML Adapter. https://github.com/theZiz/aha -->
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="application/xml+xhtml; charset=UTF-8"/>
+<title>NoisePQC++ XXhfs Debug Log</title>
+<style type="text/css">
+pre {white-space: pre-wrap; white-space: -moz-pre-wrap !important;
+white-space: -pre-wrap; white-space: -o-pre-wrap; word-wrap: break-word;}
+</style>
+</head>
+<body style="background-color:#ffffff; color:#1a1a1a; font-family:'Menlo','Consolas','DejaVu Sans Mono',monospace; font-size:9pt; line-height:1.4; padding:12px;">
+<pre>
+
+================================================================================
+       NOISE PROTOCOL HANDSHAKE PATTERNS DEMONSTRATION
+================================================================================
+Requested Pattern: XXhfs
+
+Logging Color Guide:
+  <span style="color:#008787;">Cyan</span>          = Initiator messages
+  <span style="color:#870087;">Magenta</span>       = Responder messages
+  <span style="color:#008700;">Green</span>         = Write operations
+  <span style="color:#005faf;">Blue</span>          = Read operations
+  <span style="color:#af5f00;">Yellow</span>        = Token processing
+  <span style="color:#0087af;">[CIPHER]</span>      = Cipher state operations
+  <span style="color:#0087af;">[SYMMETRIC]</span>   = Symmetric state operations
+
+================================================================================
+       NOISE XXhfs PATTERN TEST
+================================================================================
+Description: HFS: Mutual auth, no prior knowledge
+Expected messages: 3
+
+Pattern structure:
+XXhfs:
+  <span style="color:#008787;">-&gt; e, e1</span>
+  <span style="color:#870087;">&lt;- e, ee, ekem1, s, es</span>
+  <span style="color:#008787;">-&gt; s, se</span>
+
+--------------------------------------------------------------------------------
+  Setup: Generating keypairs
+--------------------------------------------------------------------------------
+Alice static key generated
+Bob static key generated
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">Key initialized (still in plaintext mode)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#878700;">No pre-messages to process</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">Key initialized (still in plaintext mode)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#878700;">No pre-messages to process</span>
+Handshake states created
+
+--------------------------------------------------------------------------------
+  Message 1: Alice (Initiator) -&gt; Bob (Responder)
+--------------------------------------------------------------------------------
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#008700;">WriteMessage: </span><span style="color:#878700;">ENTER (pattern index: 0, payload size: 4 bytes)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#005f00;">WriteMessage: </span><span style="color:#878700;">Processing 2 tokens from pattern</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Token e: </span><span style="color:#878700;">Writing ephemeral key</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Generating new ephemeral keypair</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Ephemeral public key size: 32 bytes</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Mixed ephemeral key into handshake hash</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Appended 32 bytes to message (total: 32 bytes)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Token e1: </span><span style="color:#878700;">Generating HFS KEM ephemeral keypair</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#0087af;">  HFS KEM algorithm: M768 (provides post-quantum security layer)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#0087af;">  Generated HFS ephemeral keypair (public key: 1184 bytes, private key: 64 bytes)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#0087af;">  Transmitting e1 public key (plaintext, dst before: 32 bytes)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">EncryptAndHash: Processing 1184 bytes (dst size before: 32)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">EncryptWithAd: Plaintext passthrough (no key) - appending 1184 bytes (nonce: 0, ad: 32 bytes)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing new ciphertext (1184 bytes) into handshake hash (dst size after: 1216)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#0087af;">  e1 public key transmitted (dst after: 1216 bytes, added: 1184 bytes)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#005f00;">WriteMessage: </span><span style="color:#878700;">Encrypting payload (4 bytes)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">EncryptAndHash: Processing 4 bytes (dst size before: 1216)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">EncryptWithAd: Plaintext passthrough (no key) - appending 4 bytes (nonce: 0, ad: 32 bytes)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing new ciphertext (4 bytes) into handshake hash (dst size after: 1220)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#005f00;">WriteMessage: </span><span style="color:#878700;">Total message size after encryption: 1220 bytes</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#008700;">WriteMessage: </span><span style="color:#878700;">Total message size: 1220 bytes</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#555555;">Pattern index incremented to 1</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#555555;">More patterns remaining (2/3)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#00afaf;">ReadMessage: </span><span style="color:#878700;">ENTER (pattern index: 0, message size: 1220 bytes)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#005faf;">ReadMessage: </span><span style="color:#878700;">Processing 2 tokens from pattern</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Token e: </span><span style="color:#878700;">Reading ephemeral key</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Read 32 bytes of ephemeral key</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Stored remote ephemeral key</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Mixed ephemeral key into handshake hash</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  1188 bytes remaining in message</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Token e1: </span><span style="color:#878700;">Receiving peer's HFS KEM ephemeral public key</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">  HFS KEM algorithm: M768</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">  Expecting plaintext e1 public key: 1184 bytes</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">DecryptAndHash: Processing 1184 bytes (dst size before: 0)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing ciphertext (1184 bytes) into handshake hash BEFORE decryption</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">DecryptWithAd: Plaintext passthrough (no key) - appending 1184 bytes (nonce: 0, ad: 32 bytes)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Decryption complete (dst size after: 1184)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">  Received peer's e1 public key: 1184 bytes (plaintext)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">  Stored peer's HFS ephemeral key as re1 (for ekem1 encapsulation)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">  Payload remaining: 4 bytes</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#005faf;">ReadMessage: </span><span style="color:#878700;">Decrypting payload (4 bytes remaining)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">DecryptAndHash: Processing 4 bytes (dst size before: 0)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing ciphertext (4 bytes) into handshake hash BEFORE decryption</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">DecryptWithAd: Plaintext passthrough (no key) - appending 4 bytes (nonce: 0, ad: 32 bytes)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Decryption complete (dst size after: 4)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#005faf;">ReadMessage: </span><span style="color:#878700;">Decrypted payload size: 4 bytes</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#555555;">Pattern index incremented to 1</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#555555;">More patterns remaining (2/3)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#00afaf;">ReadMessage: </span><span style="color:#878700;">EXIT</span>
+✓ Payload verified
+
+--------------------------------------------------------------------------------
+  Message 2: Bob (Responder) -&gt; Alice (Initiator)
+--------------------------------------------------------------------------------
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#008700;">WriteMessage: </span><span style="color:#878700;">ENTER (pattern index: 1, payload size: 4 bytes)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#005f00;">WriteMessage: </span><span style="color:#878700;">Processing 5 tokens from pattern</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Token e: </span><span style="color:#878700;">Writing ephemeral key</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Generating new ephemeral keypair</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Ephemeral public key size: 32 bytes</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Mixed ephemeral key into handshake hash</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Appended 32 bytes to message (total: 32 bytes)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Token ee: </span><span style="color:#878700;">Performing DH(e, re)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Computing ephemeral-ephemeral DH</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  DH result: 32 bytes</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">State transition: PLAINTEXT -&gt; ENCRYPTED mode</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Mixed DH result into chaining key</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Token ekem1: </span><span style="color:#878700;">Performing HFS KEM encapsulation to peer's e1</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">  HFS KEM algorithm: M768</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">  Encapsulating to peer's re1 (1184 bytes)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">  KEM encapsulation complete:</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">    Ciphertext: 1088 bytes (to transmit)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">    Shared secret: 32 bytes (for key derivation)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">  Transmitting ciphertext (encrypted, dst before: 32 bytes)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">EncryptAndHash: Processing 1088 bytes (dst size before: 32)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">EncryptWithAd: Encrypting 1088 bytes with nonce 0 (ad: 32 bytes, dst size before: 32)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 1104 bytes appended to dst (overhead: 16 bytes, new nonce: 1, dst size after: 1136)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing new ciphertext (1104 bytes) into handshake hash (dst size after: 1136)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">  Ciphertext transmitted (dst after: 1136 bytes)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">Key re-initialized (nonce reset to 0)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#0087af;">  MixKey(kem_output) - HFS shared secret mixed into chaining key</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Token s: </span><span style="color:#878700;">Writing static key</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Static public key size: 32 bytes</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  dst size before encryption: 1136 bytes</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">EncryptAndHash: Processing 32 bytes (dst size before: 1136)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">EncryptWithAd: Encrypting 32 bytes with nonce 0 (ad: 32 bytes, dst size before: 1136)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 48 bytes appended to dst (overhead: 16 bytes, new nonce: 1, dst size after: 1184)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing new ciphertext (48 bytes) into handshake hash (dst size after: 1184)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  dst size after encryption: 1184 bytes</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Token es: </span><span style="color:#878700;">Performing DH(e, rs) or DH(s, re)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Responder: Computing DH(s, re)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  DH result: 32 bytes</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">Key re-initialized (nonce reset to 0)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Mixed DH result into chaining key</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#005f00;">WriteMessage: </span><span style="color:#878700;">Encrypting payload (4 bytes)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">EncryptAndHash: Processing 4 bytes (dst size before: 1184)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">EncryptWithAd: Encrypting 4 bytes with nonce 0 (ad: 32 bytes, dst size before: 1184)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 20 bytes appended to dst (overhead: 16 bytes, new nonce: 1, dst size after: 1204)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing new ciphertext (20 bytes) into handshake hash (dst size after: 1204)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#005f00;">WriteMessage: </span><span style="color:#878700;">Total message size after encryption: 1204 bytes</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#008700;">WriteMessage: </span><span style="color:#878700;">Total message size: 1204 bytes</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#555555;">Pattern index incremented to 2</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#555555;">More patterns remaining (3/3)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#00afaf;">ReadMessage: </span><span style="color:#878700;">ENTER (pattern index: 1, message size: 1204 bytes)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#005faf;">ReadMessage: </span><span style="color:#878700;">Processing 5 tokens from pattern</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Token e: </span><span style="color:#878700;">Reading ephemeral key</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Read 32 bytes of ephemeral key</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Stored remote ephemeral key</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Mixed ephemeral key into handshake hash</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  1172 bytes remaining in message</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Token ee: </span><span style="color:#878700;">Performing DH(e, re)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Computing ephemeral-ephemeral DH</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  DH result: 32 bytes</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">State transition: PLAINTEXT -&gt; ENCRYPTED mode</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Mixed DH result into chaining key</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Token ekem1: </span><span style="color:#878700;">Performing HFS KEM decapsulation with local e1</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#0087af;">  HFS KEM algorithm: M768</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#0087af;">  Expecting encrypted ciphertext: 1104 bytes (ct: 1088 + overhead: 16)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">DecryptAndHash: Processing 1104 bytes (dst size before: 0)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing ciphertext (1104 bytes) into handshake hash BEFORE decryption</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">DecryptWithAd: Decrypting 1104 bytes with nonce 0 (ad: 32 bytes, dst size before: 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 1088 bytes appended to dst (removed 16 bytes overhead, new nonce: 1, dst size after: 1088)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Decryption complete (dst size after: 1088)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#0087af;">  Received ciphertext: 1088 bytes (decrypted)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#0087af;">  Decapsulating with local e1 private key (64 bytes)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#0087af;">  KEM decapsulation complete:</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#0087af;">    Shared secret: 32 bytes (matches peer's)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">Key re-initialized (nonce reset to 0)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#0087af;">  MixKey(kem_output) - HFS shared secret mixed into chaining key</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#0087af;">  Payload remaining: 68 bytes</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Token s: </span><span style="color:#878700;">Reading static key</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Expected encrypted static key size: 48 bytes (key: 32, overhead: 16)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Reading 48 bytes of static key data</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">DecryptAndHash: Processing 48 bytes (dst size before: 0)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing ciphertext (48 bytes) into handshake hash BEFORE decryption</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">DecryptWithAd: Decrypting 48 bytes with nonce 0 (ad: 32 bytes, dst size before: 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 32 bytes appended to dst (removed 16 bytes overhead, new nonce: 1, dst size after: 32)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Decryption complete (dst size after: 32)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Decrypted static key size: 32 bytes</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Stored remote static key</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  20 bytes remaining in message</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Token es: </span><span style="color:#878700;">Performing DH(e, rs) or DH(s, re)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Initiator: Computing DH(e, rs)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  DH result: 32 bytes</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">Key re-initialized (nonce reset to 0)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Mixed DH result into chaining key</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#005faf;">ReadMessage: </span><span style="color:#878700;">Decrypting payload (20 bytes remaining)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">DecryptAndHash: Processing 20 bytes (dst size before: 0)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing ciphertext (20 bytes) into handshake hash BEFORE decryption</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">DecryptWithAd: Decrypting 20 bytes with nonce 0 (ad: 32 bytes, dst size before: 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 4 bytes appended to dst (removed 16 bytes overhead, new nonce: 1, dst size after: 4)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Decryption complete (dst size after: 4)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#005faf;">ReadMessage: </span><span style="color:#878700;">Decrypted payload size: 4 bytes</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#555555;">Pattern index incremented to 2</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#555555;">More patterns remaining (3/3)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#00afaf;">ReadMessage: </span><span style="color:#878700;">EXIT</span>
+✓ Payload verified
+
+--------------------------------------------------------------------------------
+  Message 3: Alice (Initiator) -&gt; Bob (Responder)
+--------------------------------------------------------------------------------
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#008700;">WriteMessage: </span><span style="color:#878700;">ENTER (pattern index: 2, payload size: 4 bytes)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#005f00;">WriteMessage: </span><span style="color:#878700;">Processing 2 tokens from pattern</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Token s: </span><span style="color:#878700;">Writing static key</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Static public key size: 32 bytes</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  dst size before encryption: 0 bytes</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">EncryptAndHash: Processing 32 bytes (dst size before: 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">EncryptWithAd: Encrypting 32 bytes with nonce 1 (ad: 32 bytes, dst size before: 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 48 bytes appended to dst (overhead: 16 bytes, new nonce: 2, dst size after: 48)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing new ciphertext (48 bytes) into handshake hash (dst size after: 48)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  dst size after encryption: 48 bytes</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Token se: </span><span style="color:#878700;">Performing DH(s, re) or DH(e, rs)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Initiator: Computing DH(s, re)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  DH result: 32 bytes</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">Key re-initialized (nonce reset to 0)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#875f00;">  Mixed DH result into chaining key</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#005f00;">WriteMessage: </span><span style="color:#878700;">Encrypting payload (4 bytes)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">EncryptAndHash: Processing 4 bytes (dst size before: 48)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">EncryptWithAd: Encrypting 4 bytes with nonce 0 (ad: 32 bytes, dst size before: 48)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 20 bytes appended to dst (overhead: 16 bytes, new nonce: 1, dst size after: 68)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing new ciphertext (20 bytes) into handshake hash (dst size after: 68)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#005f00;">WriteMessage: </span><span style="color:#878700;">Total message size after encryption: 68 bytes</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#008700;">WriteMessage: </span><span style="color:#878700;">Total message size: 68 bytes</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#555555;">Pattern index incremented to 3</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#555555;"></span><span style="font-weight:bold;color:#555555;">=== HANDSHAKE COMPLETE ===</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#555555;">Splitting cipher states...</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">Key re-initialized (nonce reset to 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">Key re-initialized (nonce reset to 0)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#555555;">Cipher states stored in status</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#555555;">Handshake hash captured (32 bytes)</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#555555;">Cleaning up sensitive handshake data</span>
+<span style="color:#008787;">[INITIATOR] </span><span style="color:#008700;">WriteMessage: </span><span style="color:#878700;">EXIT (handshake complete)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#00afaf;">ReadMessage: </span><span style="color:#878700;">ENTER (pattern index: 2, message size: 68 bytes)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#005faf;">ReadMessage: </span><span style="color:#878700;">Processing 2 tokens from pattern</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Token s: </span><span style="color:#878700;">Reading static key</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Expected encrypted static key size: 48 bytes (key: 32, overhead: 16)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Reading 48 bytes of static key data</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">DecryptAndHash: Processing 48 bytes (dst size before: 0)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing ciphertext (48 bytes) into handshake hash BEFORE decryption</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">DecryptWithAd: Decrypting 48 bytes with nonce 1 (ad: 32 bytes, dst size before: 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 32 bytes appended to dst (removed 16 bytes overhead, new nonce: 2, dst size after: 32)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Decryption complete (dst size after: 32)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Decrypted static key size: 32 bytes</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Stored remote static key</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  20 bytes remaining in message</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Token se: </span><span style="color:#878700;">Performing DH(s, re) or DH(e, rs)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Responder: Computing DH(e, rs)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  DH result: 32 bytes</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">Key re-initialized (nonce reset to 0)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#875f00;">  Mixed DH result into chaining key</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#005faf;">ReadMessage: </span><span style="color:#878700;">Decrypting payload (20 bytes remaining)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">DecryptAndHash: Processing 20 bytes (dst size before: 0)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Mixing ciphertext (20 bytes) into handshake hash BEFORE decryption</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">DecryptWithAd: Decrypting 20 bytes with nonce 0 (ad: 32 bytes, dst size before: 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 4 bytes appended to dst (removed 16 bytes overhead, new nonce: 1, dst size after: 4)</span>
+<span style="color:#0087af;">[SYMMETRIC] </span><span style="color:#878700;">  Decryption complete (dst size after: 4)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#005faf;">ReadMessage: </span><span style="color:#878700;">Decrypted payload size: 4 bytes</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#555555;">Pattern index incremented to 3</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#555555;"></span><span style="font-weight:bold;color:#555555;">=== HANDSHAKE COMPLETE ===</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#555555;">Splitting cipher states...</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">Key re-initialized (nonce reset to 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">Key re-initialized (nonce reset to 0)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#555555;">Cipher states stored in status</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#555555;">Handshake hash captured (32 bytes)</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#555555;">Cleaning up sensitive handshake data</span>
+<span style="color:#870087;">[RESPONDER] </span><span style="color:#00afaf;">ReadMessage: </span><span style="color:#878700;">EXIT (handshake complete)</span>
+✓ Payload verified
+
+--------------------------------------------------------------------------------
+  Verification
+--------------------------------------------------------------------------------
+✓ Both sides report handshake complete
+✓ Handshake hashes match
+✓ Bob learned Alice's static key
+✓ Alice learned Bob's static key
+
+--------------------------------------------------------------------------------
+  Post-Handshake Transport: Alice -&gt; Bob
+--------------------------------------------------------------------------------
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">EncryptWithAd: Encrypting 10 bytes with nonce 0 (ad: 0 bytes, dst size before: 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 26 bytes appended to dst (overhead: 16 bytes, new nonce: 1, dst size after: 26)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">DecryptWithAd: Decrypting 26 bytes with nonce 0 (ad: 0 bytes, dst size before: 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 10 bytes appended to dst (removed 16 bytes overhead, new nonce: 1, dst size after: 10)</span>
+✓ Alice -&gt; Bob transport message successful
+
+--------------------------------------------------------------------------------
+  Post-Handshake Transport: Bob -&gt; Alice
+--------------------------------------------------------------------------------
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">EncryptWithAd: Encrypting 10 bytes with nonce 0 (ad: 0 bytes, dst size before: 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 26 bytes appended to dst (overhead: 16 bytes, new nonce: 1, dst size after: 26)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">DecryptWithAd: Decrypting 26 bytes with nonce 0 (ad: 0 bytes, dst size before: 0)</span>
+<span style="color:#0087af;">[CIPHER] </span><span style="color:#878700;">  Result: 10 bytes appended to dst (removed 16 bytes overhead, new nonce: 1, dst size after: 10)</span>
+✓ Bob -&gt; Alice transport message successful
+
+✓✓✓ XXhfs PATTERN TEST PASSED ✓✓✓
+
+</pre>
+</body>
+</html>

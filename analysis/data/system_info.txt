@@ -1,0 +1,32 @@
+=== NoisePQC++ Benchmark System Info ===
+Date: 2026-04-19 03:49:35 UTC
+
+--- OS ---
+Darwin MacBookPro.localdomain 24.6.0 Darwin Kernel Version 24.6.0: Mon Jan 19 22:00:10 PST 2026; root:xnu-11417.140.69.708.3~1/RELEASE_X86_64 x86_64
+ProductName:		macOS
+ProductVersion:		15.7.4
+BuildVersion:		24G517
+
+--- CPU ---
+Model: Intel(R) Core(TM) i7-1068NG7 CPU @ 2.30GHz
+Cores: 8
+Frequency: 2300000000 Hz
+
+--- Memory ---
+Total: 32 GB
+
+--- Compiler ---
+C Compiler: /usr/local/opt/llvm@18/bin/clang
+C++ Compiler: /usr/local/opt/llvm@18/bin/clang++
+Homebrew clang version 18.1.8
+Target: x86_64-apple-darwin24.6.0
+Thread model: posix
+InstalledDir: /usr/local/opt/llvm@18/bin
+
+--- CMake ---
+cmake version 4.0.4
+
+--- Build Configuration ---
+Generator: Ninja Multi-Config
+Config: Release
+Benchmark min time: 3s

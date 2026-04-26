@@ -1,0 +1,17 @@
+# NoisePQC++ Benchmark Analysis Dependencies
+# Install with: pip install -r requirements.txt
+
+# Data manipulation
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Jupyter notebook
+jupyterlab>=4.0.0
+notebook>=7.0.0
+
+# Statistics
+scipy>=1.10.0
