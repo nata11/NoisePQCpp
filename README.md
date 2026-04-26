@@ -1,5 +1,7 @@
 # NoisePQC++
 
+[![DOI](https://zenodo.org/badge/1076354966.svg)](https://doi.org/10.5281/zenodo.19782168)
+
 A C++23 reference implementation of the Noise Protocol Framework with Post-Quantum Cryptography (PQC) and Hybrid Forward Secrecy (HFS) support.
 
 ## Overview
