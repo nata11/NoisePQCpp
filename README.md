@@ -86,131 +86,6 @@ NoisePQC++ is a modern, type-safe implementation of the [Noise Protocol Framewor
 
 All classical, PQ, and HFS patterns are implemented and covered by automated tests.
 
-## Project Structure
-
-```
-NoisePQC++/
-├── analysis/                       # Benchmark analysis tools
-│   ├── benchmark_analysis.ipynb    # Jupyter notebook for results visualization
-│   ├── data/                       # Raw benchmark data (JSON/CSV)
-│   ├── figures/                    # Generated charts and plots
-│   ├── requirements.txt            # Python analysis dependencies
-│   └── scripts/                    # Analysis scripts
-│       ├── json_to_csv.py          # Convert Google Benchmark JSON to CSV
-│       └── render_results.py       # Render performance charts
-│
-├── benchmarks/                     # Performance benchmarks (Google Benchmark)
-│   ├── bench_common.hpp            # Shared benchmark helpers
-│   ├── bench_handshake.cpp         # Handshake pattern performance benchmarks
-│   ├── bench_example.cpp           # Basic benchmark examples
-│   └── network/                    # Network performance benchmarks
-│       ├── bench_server.cpp        # Benchmark server
-│       ├── bench_client.cpp        # Benchmark client
-│       └── bench_stress.cpp        # Stress testing tool
-│
-├── cmake/                          # CMake toolchains and build configuration
-│   ├── BuildConfig.cmake           # Shared build options and flags
-│   ├── PlatformDetection.cmake     # Platform/architecture detection
-│   ├── clang18-linux-toolchain.cmake     # Linux Clang 18 toolchain
-│   ├── clang18-macOS-toolchain.cmake     # macOS Clang 18 toolchain
-│   ├── clang18-rasPi-toolchain.cmake     # Raspberry Pi Clang 18 toolchain
-│   └── gcc15-linux-toolchain.cmake       # Linux GCC 15 toolchain
-│
-├── docker/                         # Docker build environments
-│   ├── clang18-linux/Dockerfile    # Clang 18 Debian Trixie image
-│   └── gcc15-linux/Dockerfile      # GCC 15 Debian Trixie image
-│
-├── docs/                           # Project documentation
-│   ├── API.md                      # Public API reference
-│   ├── Architecture.md             # System architecture and module layers
-│   ├── BenchmarkingGuide.md        # Benchmarking workflows
-│   ├── BuildGuide.md               # Platform-specific build instructions
-│   ├── DockerGuide.md              # Docker build/run guide
-│   ├── LoggingAndDebugging.md      # Debug build and logging guide
-│   └── PatternGuide.md             # Noise pattern reference
-│
-├── examples/                       # Usage examples
-│   ├── dh_sandbox.cpp              # DH/KEM exploration sandbox
-│   ├── example_test.cpp            # Complete XX handshake example
-│   ├── example_test_pq.cpp         # PQNoise API demonstration
-│   ├── hs_sandbox.cpp              # HandshakeState exploration sandbox
-│   ├── mlkem_sandbox.cpp           # ML-KEM exploration sandbox
-│   ├── pattern_zoo.cpp             # Interactive pattern explorer
-│   ├── protocol_sandbox.cpp        # Protocol parsing sandbox
-│   └── asio-networking/            # TCP client/server examples
-│       ├── asio_common.hpp         # Shared ASIO helpers
-│       ├── alice.cpp               # Quote exchange server
-│       ├── bob.cpp                 # Quote exchange client
-│       ├── noise_client.cpp        # Basic Noise client (XX)
-│       ├── noise_client_multi.cpp  # Multi-mode client
-│       ├── noise_server.cpp        # Basic Noise server (XX)
-│       └── noise_server_multi.cpp  # Multi-mode server (XX/pqXX/XXhfs)
-│
-├── include/                        # Generated/configured headers
-│   └── version.h.in                # CMake-configured version header
-│
-├── output/                         # Runtime output artifacts
-│   └── debug-logs/                 # Sample debug captures (HTML/MD/PNG)
-│
-├── scripts/                        # Helper shell scripts
-│   ├── capture_debug_output.sh     # Capture debug logs to HTML/MD/PNG
-│   └── run_benchmarks.sh           # Run benchmark suite
-│
-├── src/                            # Source modules (.cppm files)
-│   ├── Cipher.cppm                 # AEAD cipher operations
-│   ├── CipherState.cppm            # Cipher state management
-│   ├── CipherState.debug.cppm      # Debug version with logging
-│   ├── Common.cppm                 # Common types and constants
-│   ├── Dh.cppm                     # Diffie-Hellman and KEM operations
-│   ├── Errors.cppm                 # Error handling
-│   ├── HandshakeState.cppm         # Handshake state machine (classical + PQ + HFS)
-│   ├── HandshakeState.debug.cppm   # Debug version with logging
-│   ├── Hash.cppm                   # Hash operations
-│   ├── Noise.cppm                  # Main module interface
-│   ├── Pattern.cppm                # Noise pattern definitions (classical + PQ + HFS)
-│   ├── Protocol.cppm               # Protocol identifier
-│   ├── SymmetricState.cppm         # Symmetric state management
-│   └── SymmetricState.debug.cppm   # Debug version with logging
-│
-├── testdata/                       # Test vectors and fixtures
-│   ├── alice_bob_quotes.json       # Quote exchange fixture (Alice → Bob)
-│   ├── bob_alice_quotes.json       # Quote exchange fixture (Bob → Alice)
-│   └── cacophony.json              # Cacophony reference test vectors
-│
-├── tests/                          # Test suite (Catch2)
-│   ├── test_cipher.cpp             # Cipher operations
-│   ├── test_cipherstate.cpp        # CipherState management
-│   ├── test_dh.cpp                 # DH and ML-KEM operations
-│   ├── test_example.cpp            # Example integration tests
-│   ├── test_handshakestate.cpp     # All 57 classical patterns
-│   ├── test_hash.cpp               # Hash functions
-│   ├── test_hfs.cpp                # Hybrid Forward Secrecy tests
-│   ├── test_noise_pq.cpp           # Post-Quantum pattern tests
-│   ├── test_pattern.cpp            # Pattern definitions
-│   ├── test_protocol.cpp           # Protocol parsing
-│   ├── test_symmetricstate.cpp     # Symmetric state
-│   └── test_vectors.cpp            # Test vector validation
-│
-├── third_party/                    # Third-party dependencies
-│   ├── botan/                      # Botan crypto library (platform-specific builds)
-│   │   ├── plat_linux_arm64/       # Linux ARM64 (Raspberry Pi)
-│   │   ├── plat_linux_x86_clang/   # Linux x86_64 (Clang)
-│   │   ├── plat_linux_x86_gcc/     # Linux x86_64 (GCC)
-│   │   ├── plat_mac_arm64/         # macOS Apple Silicon
-│   │   ├── plat_mac_x86/           # macOS Intel
-│   │   └── plat_win_x86/           # Windows x86_64
-│   └── nlohmann/                   # nlohmann/json header-only library
-│
-├── CMakeLists.txt                  # Root build entry point
-├── Doxyfile                        # Doxygen API doc configuration
-├── CHANGELOG.md                    # Release notes
-├── CITATION.cff                    # Citation metadata
-├── LICENSE                         # Project license
-├── README.md                       # This file
-├── RESEARCH-CITATION.md            # Research citation references
-└── THIRD_PARTY_NOTICES.md          # Third-party license notices
-```
-
 ## Building
 
 ### Prerequisites
@@ -223,13 +98,13 @@ NoisePQC++/
 - **Ninja** build system (required for C++ modules)
 - **Catch2** v3.11.0 (automatically downloaded via CMake FetchContent if not found system-wide)
 - **ASIO** (standalone, non-Boost) for networking examples (automatically downloaded via CMake FetchContent if not found system-wide)
-- **Botan** 3.10.0 (included in `third_party/` for multiple platforms)
+- **Botan** 3.11.1 (included in `third_party/` for multiple platforms)
 
 ### Build Instructions
 
 **Note**: On first CMake run, Catch2 and Google Benchmark will be automatically downloaded via FetchContent if not found system-wide.
 
-**Pre-built Botan 3.10.0** minimized build sources are provided in `third_party/` for:
+**Pre-built Botan 3.11.1** minimized build sources are provided in `third_party/` for:
 - **macOS**: x86_64 (Intel) and ARM64 (Apple Silicon) with Clang 18
 - **Linux**: x86_64 and ARM64 with GCC 15.2 and Clang 18
 - **Windows**: x86_64 with MSVC 19.44+
@@ -523,6 +398,6 @@ its own license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 ## Acknowledgments
 
 Built with:
-- [Botan 3.10.0](https://botan.randombit.net/) - Cryptographic primitives
+- [Botan 3.11.1](https://botan.randombit.net/) - Cryptographic primitives
 - [Catch2 v3.11.0](https://github.com/catchorg/Catch2) - Testing framework
 - [Google Benchmark](https://github.com/google/benchmark) - Micro benchmarking

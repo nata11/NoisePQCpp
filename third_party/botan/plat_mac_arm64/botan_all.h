@@ -1,5 +1,5 @@
 /*
-* Botan 3.10.0 Amalgamation
+* Botan 3.11.1 Amalgamation
 * (C) 1999-2023 The Botan Authors
 *
 * Botan is released under the Simplified BSD License (see license.txt)
@@ -8,7 +8,6 @@
 #ifndef BOTAN_AMALGAMATION_H_
 #define BOTAN_AMALGAMATION_H_
 
-#include <algorithm>
 #include <array>
 #include <chrono>
 #include <concepts>
@@ -30,7 +29,7 @@
 
 /**
 * @file  build.h
-* @brief Build configuration for Botan 3.10.0
+* @brief Build configuration for Botan 3.11.1
 */
 
 /* NOLINTBEGIN(*-macro-usage,*-macro-to-enum) */
@@ -53,12 +52,12 @@
 /**
 * The minor version of the release
 */
-#define BOTAN_VERSION_MINOR 10
+#define BOTAN_VERSION_MINOR 11
 
 /**
 * The patch version of the release
 */
-#define BOTAN_VERSION_PATCH 0
+#define BOTAN_VERSION_PATCH 1
 
 /**
  * Expands to an integer of the form YYYYMMDD if this is an official
@@ -69,7 +68,7 @@
  *
  * TODO(Botan4) remove this
  */
-#define BOTAN_VERSION_DATESTAMP 20251106
+#define BOTAN_VERSION_DATESTAMP 20260331
 
 /**
  * A string set to the release type
@@ -89,7 +88,7 @@
  *
  * TODO(Botan4) remove this
  */
-#define BOTAN_VERSION_VC_REVISION "git:e27d332089247f04e89854a2e60a3af2ec4e430f"
+#define BOTAN_VERSION_VC_REVISION "git:86d105523def181ae833e3aaaf773b1b0c20dda4"
 
 /**
  * A macro expanding to a string that is set at build time using the
@@ -462,352 +461,6 @@ constexpr size_t DefaultBufferSize = 4096;
 
 namespace Botan {
 
-/**
-* Different types of errors that might occur
-*/
-enum class ErrorType : uint16_t {
-   /** Some unknown error */
-   Unknown = 1,
-   /** An error while calling a system interface */
-   SystemError = 2,
-   /** An operation seems valid, but not supported by the current version */
-   NotImplemented = 3,
-   /** Memory allocation failure */
-   OutOfMemory = 4,
-   /** An internal error occurred */
-   InternalError = 5,
-   /** An I/O error occurred */
-   IoError = 6,
-
-   /** Invalid object state */
-   InvalidObjectState = 100,
-   /** A key was not set on an object when this is required */
-   KeyNotSet = 101,
-   /** The application provided an argument which is invalid */
-   InvalidArgument = 102,
-   /** A key with invalid length was provided */
-   InvalidKeyLength = 103,
-   /** A nonce with invalid length was provided */
-   InvalidNonceLength = 104,
-   /** An object type was requested but cannot be found */
-   LookupError = 105,
-   /** Encoding a message or datum failed */
-   EncodingFailure = 106,
-   /** Decoding a message or datum failed */
-   DecodingFailure = 107,
-   /** A TLS error (error_code will be the alert type) */
-   TLSError = 108,
-   /** An error during an HTTP operation */
-   HttpError = 109,
-   /** A message with an invalid authentication tag was detected */
-   InvalidTag = 110,
-   /** An error during Roughtime validation */
-   RoughtimeError = 111,
-
-   /** An error when interacting with CommonCrypto API */
-   CommonCryptoError = 201,
-   /** An error when interacting with a PKCS11 device */
-   Pkcs11Error = 202,
-   /** An error when interacting with a TPM device */
-   TPMError = 203,
-   /** An error when interacting with a database */
-   DatabaseError = 204,
-
-   /** An error when interacting with zlib */
-   ZlibError = 300,
-   /** An error when interacting with bzip2 */
-   Bzip2Error = 301,
-   /** An error when interacting with lzma */
-   LzmaError = 302,
-
-};
-
-//! \brief Convert an ErrorType to string
-std::string BOTAN_PUBLIC_API(2, 11) to_string(ErrorType type);
-
-/**
-* Base class for all exceptions thrown by the library
-*/
-class BOTAN_PUBLIC_API(2, 0) Exception : public std::exception {
-   public:
-      /**
-      * Return a descriptive string which is hopefully comprehensible to
-      * a developer. It will likely not be useful for an end user.
-      *
-      * The string has no particular format, and the content of exception
-      * messages may change from release to release. Thus the main use of this
-      * function is for logging or debugging.
-      */
-      const char* what() const noexcept override { return m_msg.c_str(); }
-
-      /**
-      * Return the "type" of error which occurred.
-      */
-      virtual ErrorType error_type() const noexcept { return ErrorType::Unknown; }
-
-      /**
-      * Return an error code associated with this exception, or otherwise 0.
-      *
-      * The domain of this error varies depending on the source, for example on
-      * POSIX systems it might be errno, while on a Windows system it might be
-      * the result of GetLastError or WSAGetLastError.
-      */
-      virtual int error_code() const noexcept { return 0; }
-
-      /**
-      * Avoid throwing base Exception, use a subclass
-      */
-      explicit Exception(std::string_view msg);
-
-      /**
-      * Avoid throwing base Exception, use a subclass
-      */
-      Exception(const char* prefix, std::string_view msg);
-
-      /**
-      * Avoid throwing base Exception, use a subclass
-      */
-      Exception(std::string_view msg, const std::exception& e);
-
-   private:
-      std::string m_msg;
-};
-
-/**
-* An invalid argument was provided to an API call.
-*/
-class BOTAN_PUBLIC_API(2, 0) Invalid_Argument : public Exception {
-   public:
-      explicit Invalid_Argument(std::string_view msg);
-
-      explicit Invalid_Argument(std::string_view msg, std::string_view where);
-
-      Invalid_Argument(std::string_view msg, const std::exception& e);
-
-      ErrorType error_type() const noexcept override { return ErrorType::InvalidArgument; }
-};
-
-/**
-* An invalid/unknown field name was passed to Public_Key::get_int_field
-*/
-class BOTAN_PUBLIC_API(3, 0) Unknown_PK_Field_Name final : public Invalid_Argument {
-   public:
-      Unknown_PK_Field_Name(std::string_view algo_name, std::string_view field_name);
-};
-
-/**
-* An invalid key length was used
-*/
-class BOTAN_PUBLIC_API(2, 0) Invalid_Key_Length final : public Invalid_Argument {
-   public:
-      Invalid_Key_Length(std::string_view name, size_t length);
-
-      ErrorType error_type() const noexcept override { return ErrorType::InvalidKeyLength; }
-};
-
-/**
-* An invalid nonce length was used
-*/
-class BOTAN_PUBLIC_API(2, 0) Invalid_IV_Length final : public Invalid_Argument {
-   public:
-      Invalid_IV_Length(std::string_view mode, size_t bad_len);
-
-      ErrorType error_type() const noexcept override { return ErrorType::InvalidNonceLength; }
-};
-
-/**
-* Invalid_Algorithm_Name Exception
-*/
-class BOTAN_PUBLIC_API(2, 0) Invalid_Algorithm_Name final : public Invalid_Argument {
-   public:
-      explicit Invalid_Algorithm_Name(std::string_view name);
-};
-
-/**
-* Encoding_Error Exception
-*/
-class BOTAN_PUBLIC_API(2, 0) Encoding_Error final : public Exception {
-   public:
-      explicit Encoding_Error(std::string_view name);
-
-      ErrorType error_type() const noexcept override { return ErrorType::EncodingFailure; }
-};
-
-/**
-* A decoding error occurred.
-*/
-class BOTAN_PUBLIC_API(2, 0) Decoding_Error : public Exception {
-   public:
-      explicit Decoding_Error(std::string_view name);
-
-      Decoding_Error(std::string_view category, std::string_view err);
-
-      Decoding_Error(std::string_view msg, const std::exception& e);
-
-      ErrorType error_type() const noexcept override { return ErrorType::DecodingFailure; }
-};
-
-/**
-* Invalid state was encountered. A request was made on an object while the
-* object was in a state where the operation cannot be performed.
-*/
-class BOTAN_PUBLIC_API(2, 0) Invalid_State : public Exception {
-   public:
-      explicit Invalid_State(std::string_view err) : Exception(err) {}
-
-      ErrorType error_type() const noexcept override { return ErrorType::InvalidObjectState; }
-};
-
-/**
-* A PRNG was called on to produce output while still unseeded
-*/
-class BOTAN_PUBLIC_API(2, 0) PRNG_Unseeded final : public Invalid_State {
-   public:
-      explicit PRNG_Unseeded(std::string_view algo);
-};
-
-/**
-* The key was not set on an object. This occurs with symmetric objects where
-* an operation which requires the key is called prior to set_key being called.
-*/
-class BOTAN_PUBLIC_API(2, 4) Key_Not_Set : public Invalid_State {
-   public:
-      explicit Key_Not_Set(std::string_view algo);
-
-      ErrorType error_type() const noexcept override { return ErrorType::KeyNotSet; }
-};
-
-/**
-* A request was made for some kind of object which could not be located
-*/
-class BOTAN_PUBLIC_API(2, 0) Lookup_Error : public Exception {
-   public:
-      explicit Lookup_Error(std::string_view err) : Exception(err) {}
-
-      Lookup_Error(std::string_view type, std::string_view algo, std::string_view provider = "");
-
-      ErrorType error_type() const noexcept override { return ErrorType::LookupError; }
-};
-
-/**
-* Algorithm_Not_Found Exception
-*
-* @warning This exception type will be removed in the future. Instead
-* just catch Lookup_Error.
-*/
-class BOTAN_PUBLIC_API(2, 0) Algorithm_Not_Found final : public Lookup_Error {
-   public:
-      explicit Algorithm_Not_Found(std::string_view name);
-};
-
-/**
-* Provider_Not_Found is thrown when a specific provider was requested
-* but that provider is not available.
-*
-* @warning This exception type will be removed in the future. Instead
-* just catch Lookup_Error.
-*/
-class BOTAN_PUBLIC_API(2, 0) Provider_Not_Found final : public Lookup_Error {
-   public:
-      Provider_Not_Found(std::string_view algo, std::string_view provider);
-};
-
-/**
-* An AEAD or MAC check detected a message modification
-*
-* In versions before 2.10, Invalid_Authentication_Tag was named
-* Integrity_Failure, it was renamed to make its usage more clear.
-*/
-class BOTAN_PUBLIC_API(2, 0) Invalid_Authentication_Tag final : public Exception {
-   public:
-      explicit Invalid_Authentication_Tag(std::string_view msg);
-
-      ErrorType error_type() const noexcept override { return ErrorType::InvalidTag; }
-};
-
-/**
-* For compatibility with older versions
-*/
-typedef Invalid_Authentication_Tag Integrity_Failure;
-
-/**
-* An error occurred while operating on an IO stream
-*/
-class BOTAN_PUBLIC_API(2, 0) Stream_IO_Error final : public Exception {
-   public:
-      explicit Stream_IO_Error(std::string_view err);
-
-      ErrorType error_type() const noexcept override { return ErrorType::IoError; }
-};
-
-/**
-* System_Error
-*
-* This exception is thrown in the event of an error related to interacting
-* with the operating system.
-*
-* This exception type also (optionally) captures an integer error code eg
-* POSIX errno or Windows GetLastError.
-*/
-class BOTAN_PUBLIC_API(2, 9) System_Error : public Exception {
-   public:
-      explicit System_Error(std::string_view msg) : Exception(msg), m_error_code(0) {}
-
-      System_Error(std::string_view msg, int err_code);
-
-      ErrorType error_type() const noexcept override { return ErrorType::SystemError; }
-
-      int error_code() const noexcept override { return m_error_code; }
-
-   private:
-      int m_error_code;
-};
-
-/**
-* An internal error occurred. If observed, please file a bug.
-*/
-class BOTAN_PUBLIC_API(2, 0) Internal_Error : public Exception {
-   public:
-      explicit Internal_Error(std::string_view err);
-
-      ErrorType error_type() const noexcept override { return ErrorType::InternalError; }
-};
-
-/**
-* Not Implemented Exception
-*
-* This is thrown in the situation where a requested operation is
-* logically valid but is not implemented by this version of the library.
-*/
-class BOTAN_PUBLIC_API(2, 0) Not_Implemented final : public Exception {
-   public:
-      explicit Not_Implemented(std::string_view err);
-
-      ErrorType error_type() const noexcept override { return ErrorType::NotImplemented; }
-};
-
-template <typename E, typename... Args>
-inline void do_throw_error(const char* file, int line, const char* func, Args... args) {
-   throw E(file, line, func, args...);
-}
-
-}  // namespace Botan
-
-
-namespace Botan {
-
-template <typename T, typename Tag, typename... Capabilities>
-class Strong;
-
-template <typename... Ts>
-struct is_strong_type : std::false_type {};
-
-template <typename... Ts>
-struct is_strong_type<Strong<Ts...>> : std::true_type {};
-
-template <typename... Ts>
-constexpr bool is_strong_type_v = is_strong_type<std::remove_const_t<Ts>...>::value;
-
 template <typename T0 = void, typename... Ts>
 struct all_same {
       static constexpr bool value = (std::is_same_v<T0, Ts> && ... && true);
@@ -827,101 +480,6 @@ struct AutoDetect {
 };
 
 }  // namespace detail
-
-namespace ranges {
-
-/**
- * Models a std::ranges::contiguous_range that (optionally) restricts its
- * value_type to ValueT. In other words: a stretch of contiguous memory of
- * a certain type (optional ValueT).
- */
-template <typename T, typename ValueT = std::ranges::range_value_t<T>>
-concept contiguous_range = std::ranges::contiguous_range<T> && std::same_as<ValueT, std::ranges::range_value_t<T>>;
-
-/**
- * Models a std::ranges::contiguous_range that satisfies
- * std::ranges::output_range with an arbitrary value_type. In other words: a
- * stretch of contiguous memory of a certain type (optional ValueT) that can be
- * written to.
- */
-template <typename T, typename ValueT = std::ranges::range_value_t<T>>
-concept contiguous_output_range = contiguous_range<T, ValueT> && std::ranges::output_range<T, ValueT>;
-
-/**
- * Models a range that can be turned into a std::span<>. Typically, this is some
- * form of ranges::contiguous_range.
- */
-template <typename T>
-concept spanable_range = std::constructible_from<std::span<const std::ranges::range_value_t<T>>, T>;
-
-/**
- * Models a range that can be turned into a std::span<> with a static extent.
- * Typically, this is a std::array or a std::span derived from an array.
- */
-// clang-format off
-template <typename T>
-concept statically_spanable_range = spanable_range<T> &&
-                                    decltype(std::span{std::declval<T&>()})::extent != std::dynamic_extent;
-
-// clang-format on
-
-/**
- * Find the length in bytes of a given contiguous range @p r.
- */
-inline constexpr size_t size_bytes(const spanable_range auto& r) {
-   return std::span{r}.size_bytes();
-}
-
-/**
- * Check that a given range @p r has a certain statically-known byte length. If
- * the range's extent is known at compile time, this is a static check,
- * otherwise a runtime argument check will be added.
- *
- * @throws Invalid_Argument  if range @p r has a dynamic extent and does not
- *                           feature the expected byte length.
- */
-template <size_t expected, spanable_range R>
-inline constexpr void assert_exact_byte_length(const R& r) {
-   const std::span s{r};
-   if constexpr(statically_spanable_range<R>) {
-      static_assert(s.size_bytes() == expected, "memory region does not have expected byte lengths");
-   } else {
-      if(s.size_bytes() != expected) {
-         throw Invalid_Argument("Memory regions did not have expected byte lengths");
-      }
-   }
-}
-
-/**
- * Check that a list of ranges (in @p r0 and @p rs) all have the same byte
- * lengths. If the first range's extent is known at compile time, this will be a
- * static check for all other ranges whose extents are known at compile time,
- * otherwise a runtime argument check will be added.
- *
- * @throws Invalid_Argument  if any range has a dynamic extent and not all
- *                           ranges feature the same byte length.
- */
-template <spanable_range R0, spanable_range... Rs>
-inline constexpr void assert_equal_byte_lengths(const R0& r0, const Rs&... rs)
-   requires(sizeof...(Rs) > 0)
-{
-   const std::span s0{r0};
-
-   if constexpr(statically_spanable_range<R0>) {
-      constexpr size_t expected_size = s0.size_bytes();
-      (assert_exact_byte_length<expected_size>(rs), ...);
-   } else {
-      const size_t expected_size = s0.size_bytes();
-      const bool correct_size =
-         ((std::span<const std::ranges::range_value_t<Rs>>{rs}.size_bytes() == expected_size) && ...);
-
-      if(!correct_size) {
-         throw Invalid_Argument("Memory regions did not have equal lengths");
-      }
-   }
-}
-
-}  // namespace ranges
 
 namespace concepts {
 
@@ -957,19 +515,6 @@ concept has_empty = requires(T a) {
    { a.empty() } -> std::same_as<bool>;
 };
 
-// clang-format off
-template <typename T>
-concept has_bounds_checked_accessors = container<T> && (
-                                          requires(T a, const T ac, typename T::size_type s) {
-                                             { a.at(s) } -> std::same_as<typename T::value_type&>;
-                                             { ac.at(s) } -> std::same_as<const typename T::value_type&>;
-                                          } ||
-                                          requires(T a, const T ac, typename T::key_type k) {
-                                             { a.at(k) } -> std::same_as<typename T::mapped_type&>;
-                                             { ac.at(k) } -> std::same_as<const typename T::mapped_type&>;
-                                          });
-// clang-format on
-
 template <typename T>
 concept resizable_container = container<T> && requires(T& c, typename T::size_type s) {
    T(s);
@@ -982,24 +527,6 @@ concept reservable_container = container<T> && requires(T& c, typename T::size_t
 template <typename T>
 concept resizable_byte_buffer =
    contiguous_container<T> && resizable_container<T> && std::same_as<typename T::value_type, uint8_t>;
-
-template <typename T>
-concept streamable = requires(std::ostream& os, T a) { os << a; };
-
-template <class T>
-concept strong_type = is_strong_type_v<T>;
-
-template <class T>
-concept contiguous_strong_type = strong_type<T> && contiguous_container<T>;
-
-template <class T>
-concept integral_strong_type = strong_type<T> && std::integral<typename T::wrapped_type>;
-
-template <class T>
-concept unsigned_integral_strong_type = strong_type<T> && std::unsigned_integral<typename T::wrapped_type>;
-
-template <typename T, typename Capability>
-concept strong_type_with_capability = T::template has_capability<Capability>();
 
 }  // namespace concepts
 
@@ -1171,7 +698,6 @@ void zap(std::vector<T, Alloc>& vec) {
 }
 
 }  // namespace Botan
-
 
 namespace Botan {
 
@@ -1724,8 +1250,343 @@ BOTAN_DEPRECATED("Use AEAD_Mode::create") inline AEAD_Mode* get_aead(std::string
 
 namespace Botan {
 
+/**
+* Different types of errors that might occur
+*/
+enum class ErrorType : uint16_t {
+   /** Some unknown error */
+   Unknown = 1,
+   /** An error while calling a system interface */
+   SystemError = 2,
+   /** An operation seems valid, but not supported by the current version */
+   NotImplemented = 3,
+   /** Memory allocation failure */
+   OutOfMemory = 4,
+   /** An internal error occurred */
+   InternalError = 5,
+   /** An I/O error occurred */
+   IoError = 6,
+
+   /** Invalid object state */
+   InvalidObjectState = 100,
+   /** A key was not set on an object when this is required */
+   KeyNotSet = 101,
+   /** The application provided an argument which is invalid */
+   InvalidArgument = 102,
+   /** A key with invalid length was provided */
+   InvalidKeyLength = 103,
+   /** A nonce with invalid length was provided */
+   InvalidNonceLength = 104,
+   /** An object type was requested but cannot be found */
+   LookupError = 105,
+   /** Encoding a message or datum failed */
+   EncodingFailure = 106,
+   /** Decoding a message or datum failed */
+   DecodingFailure = 107,
+   /** A TLS error (error_code will be the alert type) */
+   TLSError = 108,
+   /** An error during an HTTP operation */
+   HttpError = 109,
+   /** A message with an invalid authentication tag was detected */
+   InvalidTag = 110,
+   /** An error during Roughtime validation */
+   RoughtimeError = 111,
+
+   /** An error when interacting with CommonCrypto API */
+   CommonCryptoError = 201,
+   /** An error when interacting with a PKCS11 device */
+   Pkcs11Error = 202,
+   /** An error when interacting with a TPM device */
+   TPMError = 203,
+   /** An error when interacting with a database */
+   DatabaseError = 204,
+
+   /** An error when interacting with zlib */
+   ZlibError = 300,
+   /** An error when interacting with bzip2 */
+   Bzip2Error = 301,
+   /** An error when interacting with lzma */
+   LzmaError = 302,
+
+};
+
+//! \brief Convert an ErrorType to string
+std::string BOTAN_PUBLIC_API(2, 11) to_string(ErrorType type);
+
+/**
+* Base class for all exceptions thrown by the library
+*/
+class BOTAN_PUBLIC_API(2, 0) Exception : public std::exception {
+   public:
+      /**
+      * Return a descriptive string which is hopefully comprehensible to
+      * a developer. It will likely not be useful for an end user.
+      *
+      * The string has no particular format, and the content of exception
+      * messages may change from release to release. Thus the main use of this
+      * function is for logging or debugging.
+      */
+      const char* what() const noexcept override { return m_msg.c_str(); }
+
+      /**
+      * Return the "type" of error which occurred.
+      */
+      virtual ErrorType error_type() const noexcept { return ErrorType::Unknown; }
+
+      /**
+      * Return an error code associated with this exception, or otherwise 0.
+      *
+      * The domain of this error varies depending on the source, for example on
+      * POSIX systems it might be errno, while on a Windows system it might be
+      * the result of GetLastError or WSAGetLastError.
+      */
+      virtual int error_code() const noexcept { return 0; }
+
+      /**
+      * Avoid throwing base Exception, use a subclass
+      */
+      explicit Exception(std::string_view msg);
+
+      /**
+      * Avoid throwing base Exception, use a subclass
+      */
+      Exception(const char* prefix, std::string_view msg);
+
+      /**
+      * Avoid throwing base Exception, use a subclass
+      */
+      Exception(std::string_view msg, const std::exception& e);
+
+   private:
+      std::string m_msg;
+};
+
+/**
+* An invalid argument was provided to an API call.
+*/
+class BOTAN_PUBLIC_API(2, 0) Invalid_Argument : public Exception {
+   public:
+      explicit Invalid_Argument(std::string_view msg);
+
+      explicit Invalid_Argument(std::string_view msg, std::string_view where);
+
+      Invalid_Argument(std::string_view msg, const std::exception& e);
+
+      ErrorType error_type() const noexcept override { return ErrorType::InvalidArgument; }
+};
+
+/**
+* An invalid/unknown field name was passed to Public_Key::get_int_field
+*/
+class BOTAN_PUBLIC_API(3, 0) Unknown_PK_Field_Name final : public Invalid_Argument {
+   public:
+      Unknown_PK_Field_Name(std::string_view algo_name, std::string_view field_name);
+};
+
+/**
+* An invalid key length was used
+*/
+class BOTAN_PUBLIC_API(2, 0) Invalid_Key_Length final : public Invalid_Argument {
+   public:
+      Invalid_Key_Length(std::string_view name, size_t length);
+
+      ErrorType error_type() const noexcept override { return ErrorType::InvalidKeyLength; }
+};
+
+/**
+* An invalid nonce length was used
+*/
+class BOTAN_PUBLIC_API(2, 0) Invalid_IV_Length final : public Invalid_Argument {
+   public:
+      Invalid_IV_Length(std::string_view mode, size_t bad_len);
+
+      ErrorType error_type() const noexcept override { return ErrorType::InvalidNonceLength; }
+};
+
+/**
+* Invalid_Algorithm_Name Exception
+*/
+class BOTAN_PUBLIC_API(2, 0) Invalid_Algorithm_Name final : public Invalid_Argument {
+   public:
+      explicit Invalid_Algorithm_Name(std::string_view name);
+};
+
+/**
+* Encoding_Error Exception
+*/
+class BOTAN_PUBLIC_API(2, 0) Encoding_Error final : public Exception {
+   public:
+      explicit Encoding_Error(std::string_view name);
+
+      ErrorType error_type() const noexcept override { return ErrorType::EncodingFailure; }
+};
+
+/**
+* A decoding error occurred.
+*/
+class BOTAN_PUBLIC_API(2, 0) Decoding_Error : public Exception {
+   public:
+      explicit Decoding_Error(std::string_view name);
+
+      Decoding_Error(std::string_view category, std::string_view err);
+
+      Decoding_Error(std::string_view msg, const std::exception& e);
+
+      ErrorType error_type() const noexcept override { return ErrorType::DecodingFailure; }
+};
+
+/**
+* Invalid state was encountered. A request was made on an object while the
+* object was in a state where the operation cannot be performed.
+*/
+class BOTAN_PUBLIC_API(2, 0) Invalid_State : public Exception {
+   public:
+      explicit Invalid_State(std::string_view err) : Exception(err) {}
+
+      ErrorType error_type() const noexcept override { return ErrorType::InvalidObjectState; }
+};
+
+/**
+* A PRNG was called on to produce output while still unseeded
+*/
+class BOTAN_PUBLIC_API(2, 0) PRNG_Unseeded final : public Invalid_State {
+   public:
+      explicit PRNG_Unseeded(std::string_view algo);
+};
+
+/**
+* The key was not set on an object. This occurs with symmetric objects where
+* an operation which requires the key is called prior to set_key being called.
+*/
+class BOTAN_PUBLIC_API(2, 4) Key_Not_Set : public Invalid_State {
+   public:
+      explicit Key_Not_Set(std::string_view algo);
+
+      ErrorType error_type() const noexcept override { return ErrorType::KeyNotSet; }
+};
+
+/**
+* A request was made for some kind of object which could not be located
+*/
+class BOTAN_PUBLIC_API(2, 0) Lookup_Error : public Exception {
+   public:
+      explicit Lookup_Error(std::string_view err) : Exception(err) {}
+
+      Lookup_Error(std::string_view type, std::string_view algo, std::string_view provider = "");
+
+      ErrorType error_type() const noexcept override { return ErrorType::LookupError; }
+};
+
+/**
+* Algorithm_Not_Found Exception
+*
+* @warning This exception type will be removed in the future. Instead
+* just catch Lookup_Error.
+*/
+class BOTAN_PUBLIC_API(2, 0) Algorithm_Not_Found final : public Lookup_Error {
+   public:
+      explicit Algorithm_Not_Found(std::string_view name);
+};
+
+/**
+* Provider_Not_Found is thrown when a specific provider was requested
+* but that provider is not available.
+*
+* @warning This exception type will be removed in the future. Instead
+* just catch Lookup_Error.
+*/
+class BOTAN_PUBLIC_API(2, 0) Provider_Not_Found final : public Lookup_Error {
+   public:
+      Provider_Not_Found(std::string_view algo, std::string_view provider);
+};
+
+/**
+* An AEAD or MAC check detected a message modification
+*
+* In versions before 2.10, Invalid_Authentication_Tag was named
+* Integrity_Failure, it was renamed to make its usage more clear.
+*/
+class BOTAN_PUBLIC_API(2, 0) Invalid_Authentication_Tag final : public Exception {
+   public:
+      explicit Invalid_Authentication_Tag(std::string_view msg);
+
+      ErrorType error_type() const noexcept override { return ErrorType::InvalidTag; }
+};
+
+/**
+* For compatibility with older versions
+*/
+typedef Invalid_Authentication_Tag Integrity_Failure;
+
+/**
+* An error occurred while operating on an IO stream
+*/
+class BOTAN_PUBLIC_API(2, 0) Stream_IO_Error final : public Exception {
+   public:
+      explicit Stream_IO_Error(std::string_view err);
+
+      ErrorType error_type() const noexcept override { return ErrorType::IoError; }
+};
+
+/**
+* System_Error
+*
+* This exception is thrown in the event of an error related to interacting
+* with the operating system.
+*
+* This exception type also (optionally) captures an integer error code eg
+* POSIX errno or Windows GetLastError.
+*/
+class BOTAN_PUBLIC_API(2, 9) System_Error : public Exception {
+   public:
+      explicit System_Error(std::string_view msg) : Exception(msg), m_error_code(0) {}
+
+      System_Error(std::string_view msg, int err_code);
+
+      ErrorType error_type() const noexcept override { return ErrorType::SystemError; }
+
+      int error_code() const noexcept override { return m_error_code; }
+
+   private:
+      int m_error_code;
+};
+
+/**
+* An internal error occurred. If observed, please file a bug.
+*/
+class BOTAN_PUBLIC_API(2, 0) Internal_Error : public Exception {
+   public:
+      explicit Internal_Error(std::string_view err);
+
+      ErrorType error_type() const noexcept override { return ErrorType::InternalError; }
+};
+
+/**
+* Not Implemented Exception
+*
+* This is thrown in the situation where a requested operation is
+* logically valid but is not implemented by this version of the library.
+*/
+class BOTAN_PUBLIC_API(2, 0) Not_Implemented final : public Exception {
+   public:
+      explicit Not_Implemented(std::string_view err);
+
+      ErrorType error_type() const noexcept override { return ErrorType::NotImplemented; }
+};
+
+template <typename E, typename... Args>
+inline void do_throw_error(const char* file, int line, const char* func, Args... args) {
+   throw E(file, line, func, args...);
+}
+
+}  // namespace Botan
+
+namespace Botan {
+
 class BER_Decoder;
 class DER_Encoder;
+class ASN1_Time;  // in asn1_time.h
+typedef ASN1_Time X509_Time;
 
 /**
 * ASN.1 Class Tags
@@ -1838,7 +1699,7 @@ class BOTAN_PUBLIC_API(2, 0) BER_Object final {
       BER_Object(BER_Object&& other) = default;
       BER_Object& operator=(const BER_Object& other) = default;
       BER_Object& operator=(BER_Object&& other) = default;
-      ~BER_Object() = default;
+      ~BER_Object();
 
       bool is_set() const { return m_type_tag != ASN1_Type::NoObject; }
 
@@ -1867,7 +1728,7 @@ class BOTAN_PUBLIC_API(2, 0) BER_Object final {
    private:
       ASN1_Type m_type_tag = ASN1_Type::NoObject;
       ASN1_Class m_class_tag = ASN1_Class::Universal;
-      secure_vector<uint8_t> m_value;
+      std::vector<uint8_t> m_value;
 
       friend class BER_Decoder;
 
@@ -2036,10 +1897,7 @@ class BOTAN_PUBLIC_API(2, 0) OID final : public ASN1_Object {
       std::vector<uint32_t> m_id;
 };
 
-inline std::ostream& operator<<(std::ostream& out, const OID& oid) {
-   out << oid.to_string();
-   return out;
-}
+BOTAN_PUBLIC_API(3, 0) std::ostream& operator<<(std::ostream& out, const OID& oid);
 
 /**
 * Compare two OIDs.
@@ -2058,75 +1916,6 @@ inline bool operator!=(const OID& a, const OID& b) {
 * @return true if a is lexicographically smaller than b
 */
 BOTAN_PUBLIC_API(2, 0) bool operator<(const OID& a, const OID& b);
-
-/**
-* Time (GeneralizedTime/UniversalTime)
-*/
-class BOTAN_PUBLIC_API(2, 0) ASN1_Time final : public ASN1_Object {
-   public:
-      /// DER encode a ASN1_Time
-      void encode_into(DER_Encoder& to) const override;
-
-      // Decode a BER encoded ASN1_Time
-      void decode_from(BER_Decoder& from) override;
-
-      /// Return an internal string representation of the time
-      std::string to_string() const;
-
-      /// Returns a human friendly string replesentation of no particular formatting
-      std::string readable_string() const;
-
-      /// Return if the time has been set somehow
-      bool time_is_set() const;
-
-      ///  Compare this time against another
-      int32_t cmp(const ASN1_Time& other) const;
-
-      /// Create an invalid ASN1_Time
-      ASN1_Time() = default;
-
-      /// Create a ASN1_Time from a time point
-      explicit ASN1_Time(const std::chrono::system_clock::time_point& time);
-
-      /// Create an ASN1_Time from seconds since epoch
-      static ASN1_Time from_seconds_since_epoch(uint64_t seconds);
-
-      /// Create an ASN1_Time from string
-      BOTAN_FUTURE_EXPLICIT ASN1_Time(std::string_view t_spec);
-
-      /// Create an ASN1_Time from string and a specified tagging (Utc or Generalized)
-      ASN1_Time(std::string_view t_spec, ASN1_Type tag);
-
-      /// Returns a STL timepoint object
-      std::chrono::system_clock::time_point to_std_timepoint() const;
-
-      /// Return time since epoch
-      uint64_t time_since_epoch() const;
-
-   private:
-      void set_to(std::string_view t_spec, ASN1_Type type);
-      bool passes_sanity_check() const;
-
-      uint32_t m_year = 0;
-      uint32_t m_month = 0;
-      uint32_t m_day = 0;
-      uint32_t m_hour = 0;
-      uint32_t m_minute = 0;
-      uint32_t m_second = 0;
-      ASN1_Type m_tag = ASN1_Type::NoObject;
-};
-
-/*
-* Comparison Operations
-*/
-BOTAN_PUBLIC_API(2, 0) bool operator==(const ASN1_Time& x, const ASN1_Time& y);
-BOTAN_PUBLIC_API(2, 0) bool operator!=(const ASN1_Time& x, const ASN1_Time& y);
-BOTAN_PUBLIC_API(2, 0) bool operator<=(const ASN1_Time& x, const ASN1_Time& y);
-BOTAN_PUBLIC_API(2, 0) bool operator>=(const ASN1_Time& x, const ASN1_Time& y);
-BOTAN_PUBLIC_API(2, 0) bool operator<(const ASN1_Time& x, const ASN1_Time& y);
-BOTAN_PUBLIC_API(2, 0) bool operator>(const ASN1_Time& x, const ASN1_Time& y);
-
-typedef ASN1_Time X509_Time;
 
 /**
 * ASN.1 string type
@@ -2217,6 +2006,87 @@ class std::hash<Botan::OID> {
    public:
       size_t operator()(const Botan::OID& oid) const noexcept { return static_cast<size_t>(oid.hash_code()); }
 };
+
+/*
+In 3.11 ASN1_Time was split out to its own header as <chrono> is huge in C++20
+However we continue to include this header (when not building the library),
+to avoid breaking applications which would expect it to still be available.
+
+TODO(Botan4) remove this
+*/
+#if defined(BOTAN_AMALGAMATION_H_) || (!defined(BOTAN_IS_BEING_BUILT) && !defined(__clang_analyzer__))
+
+namespace Botan {
+
+/**
+* Time (GeneralizedTime/UniversalTime)
+*/
+class BOTAN_PUBLIC_API(2, 0) ASN1_Time final : public ASN1_Object {
+   public:
+      /// DER encode a ASN1_Time
+      void encode_into(DER_Encoder& to) const override;
+
+      // Decode a BER encoded ASN1_Time
+      void decode_from(BER_Decoder& from) override;
+
+      /// Return an internal string representation of the time
+      std::string to_string() const;
+
+      /// Returns a human friendly string representation of no particular formatting
+      std::string readable_string() const;
+
+      /// Return if the time has been set somehow
+      bool time_is_set() const;
+
+      ///  Compare this time against another
+      int32_t cmp(const ASN1_Time& other) const;
+
+      /// Create an invalid ASN1_Time
+      ASN1_Time() = default;
+
+      /// Create a ASN1_Time from a time point
+      explicit ASN1_Time(const std::chrono::system_clock::time_point& time);
+
+      /// Create an ASN1_Time from seconds since epoch
+      static ASN1_Time from_seconds_since_epoch(uint64_t seconds);
+
+      /// Create an ASN1_Time from string
+      BOTAN_FUTURE_EXPLICIT ASN1_Time(std::string_view t_spec);
+
+      /// Create an ASN1_Time from string and a specified tagging (Utc or Generalized)
+      ASN1_Time(std::string_view t_spec, ASN1_Type tag);
+
+      /// Returns a STL timepoint object
+      std::chrono::system_clock::time_point to_std_timepoint() const;
+
+      /// Return time since epoch
+      uint64_t time_since_epoch() const;
+
+   private:
+      void set_to(std::string_view t_spec, ASN1_Type type);
+      bool passes_sanity_check() const;
+
+      uint32_t m_year = 0;
+      uint32_t m_month = 0;
+      uint32_t m_day = 0;
+      uint32_t m_hour = 0;
+      uint32_t m_minute = 0;
+      uint32_t m_second = 0;
+      ASN1_Type m_tag = ASN1_Type::NoObject;
+};
+
+/*
+* Comparison Operations
+*/
+BOTAN_PUBLIC_API(2, 0) bool operator==(const ASN1_Time& x, const ASN1_Time& y);
+BOTAN_PUBLIC_API(2, 0) bool operator!=(const ASN1_Time& x, const ASN1_Time& y);
+BOTAN_PUBLIC_API(2, 0) bool operator<=(const ASN1_Time& x, const ASN1_Time& y);
+BOTAN_PUBLIC_API(2, 0) bool operator>=(const ASN1_Time& x, const ASN1_Time& y);
+BOTAN_PUBLIC_API(2, 0) bool operator<(const ASN1_Time& x, const ASN1_Time& y);
+BOTAN_PUBLIC_API(2, 0) bool operator>(const ASN1_Time& x, const ASN1_Time& y);
+
+}  // namespace Botan
+#endif
 
 namespace Botan {
 
@@ -2600,184 +2470,8 @@ size_t BOTAN_PUBLIC_API(2, 1) base64_decode_max_output(size_t input_length);
 
 namespace Botan {
 
-/**
-* This class represents an abstract data source object.
-*/
-class BOTAN_PUBLIC_API(2, 0) DataSource {
-   public:
-      /**
-      * Read from the source. Moves the internal offset so that every
-      * call to read will return a new portion of the source.
-      *
-      * @param out the byte array to write the result to
-      * @param length the length of the byte array out
-      * @return length in bytes that was actually read and put
-      * into out
-      */
-      [[nodiscard]] virtual size_t read(uint8_t out[], size_t length) = 0;
-
-      virtual bool check_available(size_t n) = 0;
-
-      /**
-      * Read from the source but do not modify the internal
-      * offset. Consecutive calls to peek() will return portions of
-      * the source starting at the same position.
-      *
-      * @param out the byte array to write the output to
-      * @param length the length of the byte array out
-      * @param peek_offset the offset into the stream to read at
-      * @return length in bytes that was actually read and put
-      * into out
-      */
-      [[nodiscard]] virtual size_t peek(uint8_t out[], size_t length, size_t peek_offset) const = 0;
-
-      /**
-      * Test whether the source still has data that can be read.
-      * @return true if there is no more data to read, false otherwise
-      */
-      virtual bool end_of_data() const = 0;
-
-      /**
-      * return the id of this data source
-      * @return std::string representing the id of this data source
-      */
-      virtual std::string id() const { return ""; }
-
-      /**
-      * Read one byte.
-      * @param out the byte to read to
-      * @return length in bytes that was actually read and put
-      * into out
-      */
-      size_t read_byte(uint8_t& out);
-
-      /**
-      * Read one byte.
-      *
-      * Returns nullopt if no further bytes are available
-      */
-      std::optional<uint8_t> read_byte();
-
-      /**
-      * Peek at one byte.
-      * @param out an output byte
-      * @return length in bytes that was actually read and put
-      * into out
-      */
-      size_t peek_byte(uint8_t& out) const;
-
-      /**
-      * Discard the next N bytes of the data
-      * @param N the number of bytes to discard
-      * @return number of bytes actually discarded
-      */
-      size_t discard_next(size_t N);
-
-      /**
-      * @return number of bytes read so far.
-      */
-      virtual size_t get_bytes_read() const = 0;
-
-      DataSource() = default;
-      virtual ~DataSource() = default;
-      DataSource(const DataSource&) = delete;
-      DataSource(DataSource&&) = default;
-      DataSource& operator=(const DataSource&) = delete;
-      DataSource& operator=(DataSource&&) = default;
-};
-
-/**
-* This class represents a Memory-Based DataSource
-*/
-class BOTAN_PUBLIC_API(2, 0) DataSource_Memory final : public DataSource {
-   public:
-      size_t read(uint8_t buf[], size_t length) override;
-      size_t peek(uint8_t buf[], size_t length, size_t offset) const override;
-      bool check_available(size_t n) override;
-      bool end_of_data() const override;
-
-      /**
-      * Construct a memory source that reads from a string
-      * @param in the string to read from
-      */
-      explicit DataSource_Memory(std::string_view in);
-
-      /**
-      * Construct a memory source that reads from a byte array
-      * @param in the byte array to read from
-      * @param length the length of the byte array
-      */
-      DataSource_Memory(const uint8_t in[], size_t length) : m_source(in, in + length), m_offset(0) {}
-
-      /**
-      * Construct a memory source that reads from a secure_vector
-      * @param in the MemoryRegion to read from
-      */
-      explicit DataSource_Memory(secure_vector<uint8_t> in) : m_source(std::move(in)), m_offset(0) {}
-
-      /**
-      * Construct a memory source that reads from an arbitrary byte buffer
-      * @param in the MemoryRegion to read from
-      */
-      explicit DataSource_Memory(std::span<const uint8_t> in) : m_source(in.begin(), in.end()), m_offset(0) {}
-
-      /**
-      * Construct a memory source that reads from a std::vector
-      * @param in the MemoryRegion to read from
-      */
-      explicit DataSource_Memory(const std::vector<uint8_t>& in) : m_source(in.begin(), in.end()), m_offset(0) {}
-
-      size_t get_bytes_read() const override { return m_offset; }
-
-   private:
-      secure_vector<uint8_t> m_source;
-      size_t m_offset;
-};
-
-/**
-* This class represents a Stream-Based DataSource.
-*/
-class BOTAN_PUBLIC_API(2, 0) DataSource_Stream final : public DataSource {
-   public:
-      size_t read(uint8_t buf[], size_t length) override;
-      size_t peek(uint8_t buf[], size_t length, size_t offset) const override;
-      bool check_available(size_t n) override;
-      bool end_of_data() const override;
-      std::string id() const override;
-
-      BOTAN_FUTURE_EXPLICIT DataSource_Stream(std::istream& in, std::string_view id = "<std::istream>");
-
-#if defined(BOTAN_TARGET_OS_HAS_FILESYSTEM)
-      /**
-      * Construct a Stream-Based DataSource from filesystem path
-      * @param filename the path to the file
-      * @param use_binary whether to treat the file as binary or not
-      */
-      BOTAN_FUTURE_EXPLICIT DataSource_Stream(std::string_view filename, bool use_binary = false);
-#endif
-
-      DataSource_Stream(const DataSource_Stream&) = delete;
-      DataSource_Stream(DataSource_Stream&&) = delete;
-      DataSource_Stream& operator=(const DataSource_Stream&) = delete;
-      DataSource_Stream& operator=(DataSource_Stream&&) = delete;
-
-      ~DataSource_Stream() override;
-
-      size_t get_bytes_read() const override { return m_total_read; }
-
-   private:
-      const std::string m_identifier;
-
-      std::unique_ptr<std::istream> m_source_memory;
-      std::istream& m_source;
-      size_t m_total_read;
-};
-
-}  // namespace Botan
-
-namespace Botan {
-
 class BigInt;
+class DataSource;
 
 /**
 * BER Decoding Object
@@ -2820,10 +2514,10 @@ class BOTAN_PUBLIC_API(2, 0) BER_Decoder final {
       BOTAN_FUTURE_EXPLICIT BER_Decoder(BER_Object&& obj) : BER_Decoder(std::move(obj), nullptr) {}
 
       BER_Decoder(const BER_Decoder& other);
-      BER_Decoder(BER_Decoder&& other) = default;
+      BER_Decoder(BER_Decoder&& other) noexcept;
 
       BER_Decoder& operator=(const BER_Decoder&) = delete;
-      BER_Decoder& operator=(BER_Decoder&&) = default;
+      BER_Decoder& operator=(BER_Decoder&&) noexcept;
 
       /**
       * Get the next object in the data stream.
@@ -2917,13 +2611,7 @@ class BOTAN_PUBLIC_API(2, 0) BER_Decoder final {
       BER_Decoder& get_next_value(T& out, ASN1_Type type_tag, ASN1_Class class_tag = ASN1_Class::ContextSpecific)
          requires std::is_standard_layout_v<T> && std::is_trivial_v<T>
       {
-         BER_Object obj = get_next_object();
-         obj.assert_is_a(type_tag, class_tag);
-
-         if(obj.length() != sizeof(T)) {
-            throw BER_Decoding_Error("Size mismatch. Object value size is " + std::to_string(obj.length()) +
-                                     "; Output type size is " + std::to_string(sizeof(T)));
-         }
+         const BER_Object obj = get_next_value(sizeof(T), type_tag, class_tag);
 
          std::memcpy(reinterpret_cast<uint8_t*>(&out), obj.bits(), obj.length());
 
@@ -2936,9 +2624,12 @@ class BOTAN_PUBLIC_API(2, 0) BER_Decoder final {
       template <typename Alloc>
       BER_Decoder& raw_bytes(std::vector<uint8_t, Alloc>& out) {
          out.clear();
-         uint8_t buf = 0;
-         while(m_source->read_byte(buf)) {
-            out.push_back(buf);
+         for(;;) {
+            if(auto next = this->read_next_byte()) {
+               out.push_back(*next);
+            } else {
+               break;
+            }
          }
          return (*this);
       }
@@ -3063,7 +2754,7 @@ class BOTAN_PUBLIC_API(2, 0) BER_Decoder final {
                                           ASN1_Class class_tag = ASN1_Class::ContextSpecific) {
          BER_Object obj = get_next_object();
 
-         ASN1_Type type_tag = static_cast<ASN1_Type>(expected_tag);
+         const ASN1_Type type_tag = static_cast<ASN1_Type>(expected_tag);
 
          if(obj.is_a(type_tag, class_tag)) {
             if(class_tag == ASN1_Class::ExplicitContextSpecific) {
@@ -3088,10 +2779,14 @@ class BOTAN_PUBLIC_API(2, 0) BER_Decoder final {
          return decode_optional_string(out, real_type, static_cast<uint32_t>(expected_tag), class_tag);
       }
 
-      ~BER_Decoder() = default;
+      ~BER_Decoder();
 
    private:
       BER_Decoder(BER_Object&& obj, BER_Decoder* parent);
+
+      std::optional<uint8_t> read_next_byte();
+
+      BER_Object get_next_value(size_t sizeofT, ASN1_Type type_tag, ASN1_Class class_tag);
 
       BER_Decoder* m_parent = nullptr;
       BER_Object m_pushed;
@@ -3261,7 +2956,7 @@ class BOTAN_PUBLIC_API(2, 0) BigInt final {
        * @param str the string to parse for an integer value
        */
       //BOTAN_DEPRECATED("Use BigInt::from_string")
-      explicit BigInt(std::string_view str);
+      explicit BigInt(std::string_view str) { *this = BigInt::from_string(str); }
 
       /**
        * Create BigInt from a string.
@@ -3275,6 +2970,21 @@ class BOTAN_PUBLIC_API(2, 0) BigInt final {
        * @param str the string to parse for an integer value
        */
       static BigInt from_string(std::string_view str);
+
+      /**
+       * Create BigInt from a sequence of digits
+       *
+       * The string is interpreted as a sequence of digits in base @p radix.
+       *
+       * Each character must be interpretable as such a digit; there is no support
+       * for whitespace or prefixes (eg '0x' or '-').
+       *
+       * Currently radix must be 10 or 16.
+       *
+       * @param digits the sequence of digits
+       * @param radix the base
+       */
+      static BigInt from_radix_digits(std::string_view digits, size_t radix);
 
       /**
        * Create a BigInt from an integer in a byte array
@@ -4847,6 +4557,17 @@ using lock_guard_type = lock_guard<T>;
 }  // namespace Botan
 
 
+/*
+* We only include <chrono> in downstream applications to avoid
+* breaking semver wrt RandomNumberGenerator::reseed. Within the
+* library we avoid it because it slows down compilation significantly.
+*
+* TODO(Botan4): remove this entirely
+*/
+#if !defined(BOTAN_IS_BEING_BUILT)
+   #include <chrono>
+#endif
+
 namespace Botan {
 
 class Entropy_Sources;
@@ -4866,11 +4587,6 @@ class BOTAN_PUBLIC_API(2, 0) RandomNumberGenerator {
       * Number of entropy bits polled for reseeding userspace RNGs like HMAC_DRBG
       */
       static constexpr size_t DefaultPollBits = 256;
-
-      /**
-      * Default poll timeout
-      */
-      static constexpr auto DefaultPollTimeout = std::chrono::milliseconds(50);
 
       virtual ~RandomNumberGenerator() = default;
 
@@ -4993,15 +4709,15 @@ class BOTAN_PUBLIC_API(2, 0) RandomNumberGenerator {
       virtual bool is_seeded() const = 0;
 
       /**
-      * Poll provided sources for up to poll_bits bits of entropy
-      * or until the timeout expires. Returns estimate of the number
-      * of bits collected.
-      *
+      * Poll provided sources for up to poll_bits bits of entropy.
+      * Returns estimate of the number of bits collected.
       * Sets the seeded state to true if enough entropy was added.
+      *
+      * @throws Exception if RNG accepts input but reseeding failed.
       */
-      virtual size_t reseed(Entropy_Sources& srcs,
-                            size_t poll_bits = RandomNumberGenerator::DefaultPollBits,
-                            std::chrono::milliseconds poll_timeout = RandomNumberGenerator::DefaultPollTimeout);
+      size_t reseed_from(Entropy_Sources& srcs, size_t poll_bits = RandomNumberGenerator::DefaultPollBits) {
+         return reseed_from_sources(srcs, poll_bits);
+      }
 
       /**
       * Reseed by reading specified bits from the RNG
@@ -5010,8 +4726,9 @@ class BOTAN_PUBLIC_API(2, 0) RandomNumberGenerator {
       *
       * @throws Exception if RNG accepts input but reseeding failed.
       */
-      virtual void reseed_from_rng(RandomNumberGenerator& rng,
-                                   size_t poll_bits = RandomNumberGenerator::DefaultPollBits);
+      void reseed_from(RandomNumberGenerator& rng, size_t poll_bits = RandomNumberGenerator::DefaultPollBits) {
+         return reseed_from_rng(rng, poll_bits);
+      }
 
       // Some utility functions built on the interface above:
 
@@ -5090,7 +4807,49 @@ class BOTAN_PUBLIC_API(2, 0) RandomNumberGenerator {
          return b;
       }
 
+      /**
+      * Reseed by reading specified bits from the RNG
+      *
+      * Sets the seeded state to true if enough entropy was added.
+      *
+      * @throws Exception if RNG accepts input but reseeding failed.
+      */
+      virtual void reseed_from_rng(RandomNumberGenerator& rng,
+                                   size_t poll_bits = RandomNumberGenerator::DefaultPollBits);
+
+#if !defined(BOTAN_IS_BEING_BUILT)
+      /**
+      * Default poll timeout
+      */
+      static constexpr auto DefaultPollTimeout = std::chrono::milliseconds(50);
+
+      /**
+       * Poll provided sources for up to poll_bits bits of entropy.
+       * Returns estimate of the number of bits collected.
+       *
+       * Sets the seeded state to true if enough entropy was added.
+       *
+       * TODO(Botan4) remove this function
+       */
+      BOTAN_DEPRECATED("Use reseed_from_sources")
+      inline size_t reseed(Entropy_Sources& srcs,
+                           size_t poll_bits = RandomNumberGenerator::DefaultPollBits,
+                           std::chrono::milliseconds /*unused_timeout*/ = DefaultPollTimeout) {
+         return reseed_from(srcs, poll_bits);
+      }
+#endif
+
    protected:
+      /**
+      * Poll provided sources for up to poll_bits bits of entropy.
+      * Returns estimate of the number of bits collected.
+      * Sets the seeded state to true if enough entropy was added.
+      *
+      * @throws Exception if RNG accepts input but reseeding failed.
+      */
+      virtual size_t reseed_from_sources(Entropy_Sources& srcs,
+                                         size_t poll_bits = RandomNumberGenerator::DefaultPollBits);
+
       /**
       * Generic interface to provide entropy to a concrete implementation and to
       * fill a given buffer with random output. Both @p output and @p input may
@@ -5211,13 +4970,11 @@ class BOTAN_PUBLIC_API(2, 0) Stateful_RNG : public RandomNumberGenerator {
       void reseed_from_rng(RandomNumberGenerator& rng, size_t poll_bits = RandomNumberGenerator::DefaultPollBits) final;
 
       /**
-      * Poll provided sources for up to poll_bits bits of entropy
-      * or until the timeout expires. Returns estimate of the number
-      * of bits collected.
+      * Poll provided sources for up to poll_bits bits of entropy.
+      * Returns estimate of the number of bits collected.
       */
-      size_t reseed(Entropy_Sources& srcs,
-                    size_t poll_bits = RandomNumberGenerator::DefaultPollBits,
-                    std::chrono::milliseconds poll_timeout = RandomNumberGenerator::DefaultPollTimeout) override;
+      size_t reseed_from_sources(Entropy_Sources& srcs,
+                                 size_t poll_bits = RandomNumberGenerator::DefaultPollBits) final;
 
       /**
       * @return intended security level of this DRBG
@@ -5903,13 +5660,16 @@ class BOTAN_PUBLIC_API(2, 0) Public_Key : public virtual Asymmetric_Key {
          return _signature_element_size_for_DER_encoding().value_or(0);
       }
 
+      // NOLINTBEGIN(bugprone-virtual-near-miss)
+
       /*
       * Return the format normally used by this algorithm for X.509 signatures
       */
-      BOTAN_DEPRECATED("Deprecated no replacement")
-      Signature_Format default_x509_signature_format() const /* NOLINT(bugprone-virtual-near-miss) */ {
+      BOTAN_DEPRECATED("Deprecated no replacement") Signature_Format default_x509_signature_format() const {
          return _default_x509_signature_format();
       }
+
+      // NOLINTEND(bugprone-virtual-near-miss)
 
       /**
       * This is an internal library function exposed on key types.
@@ -6231,6 +5991,183 @@ BOTAN_DEPRECATED("Use X25519_PrivateKey") typedef X25519_PrivateKey Curve25519_P
 
 namespace Botan {
 
+/**
+* This class represents an abstract data source object.
+*/
+class BOTAN_PUBLIC_API(2, 0) DataSource {
+   public:
+      /**
+      * Read from the source. Moves the internal offset so that every
+      * call to read will return a new portion of the source.
+      *
+      * @param out the byte array to write the result to
+      * @param length the length of the byte array out
+      * @return length in bytes that was actually read and put
+      * into out
+      */
+      [[nodiscard]] virtual size_t read(uint8_t out[], size_t length) = 0;
+
+      virtual bool check_available(size_t n) = 0;
+
+      /**
+      * Read from the source but do not modify the internal
+      * offset. Consecutive calls to peek() will return portions of
+      * the source starting at the same position.
+      *
+      * @param out the byte array to write the output to
+      * @param length the length of the byte array out
+      * @param peek_offset the offset into the stream to read at
+      * @return length in bytes that was actually read and put
+      * into out
+      */
+      [[nodiscard]] virtual size_t peek(uint8_t out[], size_t length, size_t peek_offset) const = 0;
+
+      /**
+      * Test whether the source still has data that can be read.
+      * @return true if there is no more data to read, false otherwise
+      */
+      virtual bool end_of_data() const = 0;
+
+      /**
+      * return the id of this data source
+      * @return std::string representing the id of this data source
+      */
+      virtual std::string id() const { return ""; }
+
+      /**
+      * Read one byte.
+      * @param out the byte to read to
+      * @return length in bytes that was actually read and put
+      * into out
+      */
+      size_t read_byte(uint8_t& out);
+
+      /**
+      * Read one byte.
+      *
+      * Returns nullopt if no further bytes are available
+      */
+      std::optional<uint8_t> read_byte();
+
+      /**
+      * Peek at one byte.
+      * @param out an output byte
+      * @return length in bytes that was actually read and put
+      * into out
+      */
+      size_t peek_byte(uint8_t& out) const;
+
+      /**
+      * Discard the next N bytes of the data
+      * @param N the number of bytes to discard
+      * @return number of bytes actually discarded
+      */
+      size_t discard_next(size_t N);
+
+      /**
+      * @return number of bytes read so far.
+      */
+      virtual size_t get_bytes_read() const = 0;
+
+      DataSource() = default;
+      virtual ~DataSource() = default;
+      DataSource(const DataSource&) = delete;
+      DataSource(DataSource&&) = default;
+      DataSource& operator=(const DataSource&) = delete;
+      DataSource& operator=(DataSource&&) = default;
+};
+
+/**
+* This class represents a Memory-Based DataSource
+*/
+class BOTAN_PUBLIC_API(2, 0) DataSource_Memory final : public DataSource {
+   public:
+      size_t read(uint8_t buf[], size_t length) override;
+      size_t peek(uint8_t buf[], size_t length, size_t offset) const override;
+      bool check_available(size_t n) override;
+      bool end_of_data() const override;
+
+      /**
+      * Construct a memory source that reads from a string
+      * @param in the string to read from
+      */
+      explicit DataSource_Memory(std::string_view in);
+
+      /**
+      * Construct a memory source that reads from a byte array
+      * @param in the byte array to read from
+      * @param length the length of the byte array
+      */
+      DataSource_Memory(const uint8_t in[], size_t length) : m_source(in, in + length), m_offset(0) {}
+
+      /**
+      * Construct a memory source that reads from a secure_vector
+      * @param in the MemoryRegion to read from
+      */
+      explicit DataSource_Memory(secure_vector<uint8_t> in) : m_source(std::move(in)), m_offset(0) {}
+
+      /**
+      * Construct a memory source that reads from an arbitrary byte buffer
+      * @param in the MemoryRegion to read from
+      */
+      explicit DataSource_Memory(std::span<const uint8_t> in) : m_source(in.begin(), in.end()), m_offset(0) {}
+
+      /**
+      * Construct a memory source that reads from a std::vector
+      * @param in the MemoryRegion to read from
+      */
+      explicit DataSource_Memory(const std::vector<uint8_t>& in) : m_source(in.begin(), in.end()), m_offset(0) {}
+
+      size_t get_bytes_read() const override { return m_offset; }
+
+   private:
+      secure_vector<uint8_t> m_source;
+      size_t m_offset;
+};
+
+/**
+* This class represents a Stream-Based DataSource.
+*/
+class BOTAN_PUBLIC_API(2, 0) DataSource_Stream final : public DataSource {
+   public:
+      size_t read(uint8_t buf[], size_t length) override;
+      size_t peek(uint8_t buf[], size_t length, size_t offset) const override;
+      bool check_available(size_t n) override;
+      bool end_of_data() const override;
+      std::string id() const override;
+
+      BOTAN_FUTURE_EXPLICIT DataSource_Stream(std::istream& in, std::string_view id = "<std::istream>");
+
+#if defined(BOTAN_TARGET_OS_HAS_FILESYSTEM)
+      /**
+      * Construct a Stream-Based DataSource from filesystem path
+      * @param filename the path to the file
+      * @param use_binary whether to treat the file as binary or not
+      */
+      BOTAN_FUTURE_EXPLICIT DataSource_Stream(std::string_view filename, bool use_binary = false);
+#endif
+
+      DataSource_Stream(const DataSource_Stream&) = delete;
+      DataSource_Stream(DataSource_Stream&&) = delete;
+      DataSource_Stream& operator=(const DataSource_Stream&) = delete;
+      DataSource_Stream& operator=(DataSource_Stream&&) = delete;
+
+      ~DataSource_Stream() override;
+
+      size_t get_bytes_read() const override { return m_total_read; }
+
+   private:
+      const std::string m_identifier;
+
+      std::unique_ptr<std::istream> m_source_memory;
+      std::istream& m_source;
+      size_t m_total_read;
+};
+
+}  // namespace Botan
+
+namespace Botan {
+
 class BOTAN_PUBLIC_API(2, 0) SQL_Database /* NOLINT(*-special-member-functions) */ {
    public:
       class BOTAN_PUBLIC_API(2, 0) SQL_DB_Error final : public Exception {
@@ -6368,10 +6305,7 @@ class BOTAN_PUBLIC_API(2, 0) DER_Encoder final {
       */
       DER_Encoder& raw_bytes(const uint8_t val[], size_t len);
 
-      template <typename Alloc>
-      DER_Encoder& raw_bytes(const std::vector<uint8_t, Alloc>& val) {
-         return raw_bytes(val.data(), val.size());
-      }
+      DER_Encoder& raw_bytes(std::span<const uint8_t> val) { return raw_bytes(val.data(), val.size()); }
 
       DER_Encoder& encode_null();
       DER_Encoder& encode(bool b);
@@ -6986,7 +6920,6 @@ inline KDF* get_kdf(std::string_view algo_spec) {
 
 }  // namespace Botan
 
-
 #if !defined(BOTAN_HAS_KYBER_90S) && !defined(BOTAN_HAS_KYBER) && !defined(BOTAN_HAS_ML_KEM)
 static_assert(
    false,
@@ -6999,15 +6932,15 @@ class BOTAN_PUBLIC_API(3, 0) KyberMode {
    public:
       enum Mode : uint8_t /* NOLINT(*-use-enum-class) */ {
          // Kyber512 as proposed in round 3 of the NIST competition
-         Kyber512_R3 = 0,
+         Kyber512_R3 BOTAN_DEPRECATED("Kyber R3 is deprecated - use ML-KEM") = 0,
          // Kyber768 as proposed in round 3 of the NIST competition
-         Kyber768_R3 = 1,
+         Kyber768_R3 BOTAN_DEPRECATED("Kyber R3 is deprecated - use ML-KEM") = 1,
          // Kyber1024 as proposed in round 3 of the NIST competition
-         Kyber1024_R3 = 2,
+         Kyber1024_R3 BOTAN_DEPRECATED("Kyber R3 is deprecated - use ML-KEM") = 2,
 
-         Kyber512 BOTAN_DEPRECATED("Use Kyber512_R3") = Kyber512_R3,
-         Kyber768 BOTAN_DEPRECATED("Use Kyber768_R3") = Kyber768_R3,
-         Kyber1024 BOTAN_DEPRECATED("Use Kyber1024_R3") = Kyber1024_R3,
+         Kyber512 BOTAN_DEPRECATED("Kyber R3 is deprecated - use ML-KEM") = 0,
+         Kyber768 BOTAN_DEPRECATED("Kyber R3 is deprecated - use ML-KEM") = 1,
+         Kyber1024 BOTAN_DEPRECATED("Kyber R3 is deprecated - use ML-KEM") = 2,
 
          ML_KEM_512 = 3,
          ML_KEM_768 = 4,
@@ -7186,6 +7119,108 @@ BOTAN_DIAGNOSTIC_POP
 
 }  // namespace Botan
 
+BOTAN_FUTURE_INTERNAL_HEADER(range_concepts.h)
+
+namespace Botan::ranges {
+
+/**
+ * Models a std::ranges::contiguous_range that (optionally) restricts its
+ * value_type to ValueT. In other words: a stretch of contiguous memory of
+ * a certain type (optional ValueT).
+ */
+template <typename T, typename ValueT = std::ranges::range_value_t<T>>
+concept contiguous_range = std::ranges::contiguous_range<T> && std::same_as<ValueT, std::ranges::range_value_t<T>>;
+
+/**
+ * Models a std::ranges::contiguous_range that satisfies
+ * std::ranges::output_range with an arbitrary value_type. In other words: a
+ * stretch of contiguous memory of a certain type (optional ValueT) that can be
+ * written to.
+ */
+template <typename T, typename ValueT = std::ranges::range_value_t<T>>
+concept contiguous_output_range = contiguous_range<T, ValueT> && std::ranges::output_range<T, ValueT>;
+
+/**
+ * Models a range that can be turned into a std::span<>. Typically, this is some
+ * form of ranges::contiguous_range.
+ */
+template <typename T>
+concept spanable_range = std::constructible_from<std::span<const std::ranges::range_value_t<T>>, T>;
+
+/**
+ * Models a range that can be turned into a std::span<> with a static extent.
+ * Typically, this is a std::array or a std::span derived from an array.
+ */
+// clang-format off
+template <typename T>
+concept statically_spanable_range = spanable_range<T> &&
+                                    decltype(std::span{std::declval<T&>()})::extent != std::dynamic_extent;
+
+// clang-format on
+
+/**
+ * Find the length in bytes of a given contiguous range @p r.
+ */
+inline constexpr size_t size_bytes(const spanable_range auto& r) {
+   return std::span{r}.size_bytes();
+}
+
+/**
+* Throws an exception indicating that the attempted read or write was invalid
+*/
+[[noreturn]] void BOTAN_UNSTABLE_API memory_region_size_violation();
+
+/**
+ * Check that a given range @p r has a certain statically-known byte length. If
+ * the range's extent is known at compile time, this is a static check,
+ * otherwise a runtime argument check will be added.
+ *
+ * @throws Invalid_Argument  if range @p r has a dynamic extent and does not
+ *                           feature the expected byte length.
+ */
+template <size_t expected, spanable_range R>
+inline constexpr void assert_exact_byte_length(const R& r) {
+   const std::span s{r};
+   if constexpr(statically_spanable_range<R>) {
+      static_assert(s.size_bytes() == expected, "memory region does not have expected byte lengths");
+   } else {
+      if(s.size_bytes() != expected) {
+         memory_region_size_violation();
+      }
+   }
+}
+
+/**
+ * Check that a list of ranges (in @p r0 and @p rs) all have the same byte
+ * lengths. If the first range's extent is known at compile time, this will be a
+ * static check for all other ranges whose extents are known at compile time,
+ * otherwise a runtime argument check will be added.
+ *
+ * @throws Invalid_Argument  if any range has a dynamic extent and not all
+ *                           ranges feature the same byte length.
+ */
+template <spanable_range R0, spanable_range... Rs>
+inline constexpr void assert_equal_byte_lengths(const R0& r0, const Rs&... rs)
+   requires(sizeof...(Rs) > 0)
+{
+   const std::span s0{r0};
+
+   if constexpr(statically_spanable_range<R0>) {
+      constexpr size_t expected_size = s0.size_bytes();
+      (assert_exact_byte_length<expected_size>(rs), ...);
+   } else {
+      const size_t expected_size = s0.size_bytes();
+      const bool correct_size =
+         ((std::span<const std::ranges::range_value_t<Rs>>{rs}.size_bytes() == expected_size) && ...);
+
+      if(!correct_size) {
+         memory_region_size_violation();
+      }
+   }
+}
+
+}  // namespace Botan::ranges
+
 BOTAN_FUTURE_INTERNAL_HEADER(mem_ops.h)
 
 /*
@@ -7218,9 +7253,8 @@ namespace Botan {
 BOTAN_PUBLIC_API(2, 0) void secure_scrub_memory(void* ptr, size_t n);
 
 /**
-* Scrub memory contents in a way that a compiler should not elide,
-* using some system specific technique. Note that this function might
-* not zero the memory.
+* Zero memory contents in a way that a compiler should not elide,
+* using some system specific technique.
 *
 * @param data  the data region to be scrubbed
 */
@@ -7634,8 +7668,6 @@ using ML_KEM_PrivateKey = Kyber_PrivateKey;
 
 }  // namespace Botan
 
-BOTAN_FUTURE_INTERNAL_HEADER(numthry.h)
-
 namespace Botan {
 
 class RandomNumberGenerator;
@@ -7663,13 +7695,13 @@ BigInt BOTAN_PUBLIC_API(2, 0) gcd(const BigInt& x, const BigInt& y);
 * @param y a positive integer
 * @return z, smallest integer such that z % x == 0 and z % y == 0
 */
-BigInt BOTAN_PUBLIC_API(2, 0) lcm(const BigInt& x, const BigInt& y);
+BOTAN_DEPRECATED("Deprecated no replacement") BigInt BOTAN_PUBLIC_API(2, 0) lcm(const BigInt& x, const BigInt& y);
 
 /**
 * @param x an integer
 * @return (x*x)
 */
-BigInt BOTAN_PUBLIC_API(2, 0) square(const BigInt& x);
+BOTAN_DEPRECATED("Just use x*x") BigInt BOTAN_PUBLIC_API(2, 0) square(const BigInt& x);
 
 /**
 * Modular inversion. This algorithm is const time with respect to x,
@@ -7694,7 +7726,7 @@ BigInt BOTAN_PUBLIC_API(2, 0) inverse_mod(const BigInt& x, const BigInt& modulus
 * @param n is an odd integer > 1
 * @return (n / m)
 */
-int32_t BOTAN_PUBLIC_API(2, 0) jacobi(BigInt a, BigInt n);
+BOTAN_DEPRECATED("Deprecated no replacement") int32_t BOTAN_PUBLIC_API(2, 0) jacobi(BigInt a, BigInt n);
 
 /**
 * Modular exponentiation
@@ -7716,6 +7748,7 @@ BigInt BOTAN_PUBLIC_API(2, 0) power_mod(const BigInt& b, const BigInt& x, const 
 * @param p the prime modulus
 * @return y such that (y*y)%p == x, or -1 if no such integer
 */
+BOTAN_DEPRECATED("Deprecated no replacement")
 BigInt BOTAN_PUBLIC_API(3, 0) sqrt_modulo_prime(const BigInt& x, const BigInt& p);
 
 /**
@@ -7724,7 +7757,7 @@ BigInt BOTAN_PUBLIC_API(3, 0) sqrt_modulo_prime(const BigInt& x, const BigInt& p
 *         largest value of n such that 2^n divides x evenly. Returns
 *         zero if x is equal to zero.
 */
-size_t BOTAN_PUBLIC_API(2, 0) low_zero_bits(const BigInt& x);
+BOTAN_DEPRECATED("Deprecated no replacement") size_t BOTAN_PUBLIC_API(2, 0) low_zero_bits(const BigInt& x);
 
 /**
 * Check for primality
@@ -7749,7 +7782,7 @@ bool BOTAN_PUBLIC_API(2, 0)
 * @return 0 if the integer is not a perfect square, otherwise
 *         returns the positive y st y*y == x
 */
-BigInt BOTAN_PUBLIC_API(2, 8) is_perfect_square(const BigInt& x);
+BOTAN_DEPRECATED("Deprecated no replacement") BigInt BOTAN_PUBLIC_API(2, 8) is_perfect_square(const BigInt& x);
 
 /**
 * Randomly generate a prime suitable for discrete logarithm parameters
@@ -7778,6 +7811,7 @@ BigInt BOTAN_PUBLIC_API(2, 0) random_prime(RandomNumberGenerator& rng,
 * @param prob use test so false positive is bounded by 1/2**prob
 * @return random prime with the specified criteria
 */
+BOTAN_DEPRECATED("Deprecated no replacement")
 BigInt BOTAN_PUBLIC_API(2, 7) generate_rsa_prime(RandomNumberGenerator& keygen_rng,
                                                  RandomNumberGenerator& prime_test_rng,
                                                  size_t bits,
@@ -7790,12 +7824,13 @@ BigInt BOTAN_PUBLIC_API(2, 7) generate_rsa_prime(RandomNumberGenerator& keygen_r
 * @param bits is how long the resulting prime should be
 * @return prime randomly chosen from safe primes of length bits
 */
+BOTAN_DEPRECATED("Deprecated no replacement")
 BigInt BOTAN_PUBLIC_API(2, 0) random_safe_prime(RandomNumberGenerator& rng, size_t bits);
 
 /**
 * The size of the PRIMES[] array
 */
-const size_t PRIME_TABLE_SIZE = 6541;
+BOTAN_DEPRECATED("Deprecated no replacement") const size_t PRIME_TABLE_SIZE = 6541;
 
 /**
 * A const array of all odd primes less than 65535
@@ -7930,6 +7965,12 @@ BOTAN_PUBLIC_API(2, 0) bool matches(DataSource& source, std::string_view extra =
 
 namespace Botan {
 
+class Public_Key;
+class Private_Key;
+class AlgorithmIdentifier;
+class EC_Group;
+class RandomNumberGenerator;
+
 BOTAN_PUBLIC_API(2, 0)
 std::unique_ptr<Public_Key> load_public_key(const AlgorithmIdentifier& alg_id, std::span<const uint8_t> key_bits);
 
@@ -7949,8 +7990,6 @@ std::unique_ptr<Private_Key> create_private_key(std::string_view algo_name,
                                                 RandomNumberGenerator& rng,
                                                 std::string_view algo_params = "",
                                                 std::string_view provider = "");
-
-class EC_Group;
 
 /**
 * Create a new ECC key
@@ -9468,8 +9507,41 @@ class BOTAN_PUBLIC_API(2, 0) Modular_Reducer final {
 
 }  // namespace Botan
 
-
 namespace Botan {
+
+template <typename T, typename Tag, typename... Capabilities>
+class Strong;
+
+template <typename... Ts>
+struct is_strong_type : std::false_type {};
+
+template <typename... Ts>
+struct is_strong_type<Strong<Ts...>> : std::true_type {};
+
+template <typename... Ts>
+constexpr bool is_strong_type_v = is_strong_type<std::remove_const_t<Ts>...>::value;
+
+namespace concepts {
+
+template <typename T>
+concept streamable = requires(std::ostream& os, T a) { os << a; };
+
+template <class T>
+concept strong_type = is_strong_type_v<T>;
+
+template <class T>
+concept contiguous_strong_type = strong_type<T> && contiguous_container<T>;
+
+template <class T>
+concept integral_strong_type = strong_type<T> && std::integral<typename T::wrapped_type>;
+
+template <class T>
+concept unsigned_integral_strong_type = strong_type<T> && std::unsigned_integral<typename T::wrapped_type>;
+
+template <typename T, typename Capability>
+concept strong_type_with_capability = T::template has_capability<Capability>();
+
+}  // namespace concepts
 
 /**
  * Added as an additional "capability tag" to enable arithmetic operators with
@@ -9587,20 +9659,6 @@ class Container_Strong_Adapter_Base : public Strong_Base<T> {
       template <typename U>
       decltype(auto) operator[](U&& i) noexcept(noexcept(this->get().operator[](i))) {
          return this->get()[std::forward<U>(i)];
-      }
-
-      template <typename U>
-      decltype(auto) at(U&& i) const noexcept(noexcept(this->get().at(i)))
-         requires(concepts::has_bounds_checked_accessors<T>)
-      {
-         return this->get().at(std::forward<U>(i));
-      }
-
-      template <typename U>
-      decltype(auto) at(U&& i) noexcept(noexcept(this->get().at(i)))
-         requires(concepts::has_bounds_checked_accessors<T>)
-      {
-         return this->get().at(std::forward<U>(i));
       }
 };
 
@@ -10508,7 +10566,6 @@ inline std::unique_ptr<Public_Key> copy_key(const Public_Key& key) {
 }
 
 }  // namespace Botan::X509
-
 
 namespace Botan {
 

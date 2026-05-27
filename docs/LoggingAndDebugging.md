@@ -934,5 +934,5 @@ The NoisePQC++ debug logging system provides:
 - [examples/README.md](../examples/README.md) - Example programs
 
 **Version**: NoisePQC++ v0.9.0
-**Botan**: 3.10.0
+**Botan**: 3.11.1
 **Catch2**: v3.11.0

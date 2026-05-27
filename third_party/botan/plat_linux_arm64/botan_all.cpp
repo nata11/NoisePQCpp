@@ -1,5 +1,5 @@
 /*
-* Botan 3.10.0 Amalgamation
+* Botan 3.11.1 Amalgamation
 * (C) 1999-2023 The Botan Authors
 *
 * Botan is released under the Simplified BSD License (see license.txt)
@@ -7,7 +7,6 @@
 
 #include "botan_all.h"
 
-#include <algorithm>
 #include <array>
 #include <bit>
 #include <chrono>
@@ -16,20 +15,24 @@
 #include <cstring>
 #include <ctime>
 #include <functional>
-#include <istream>
+#include <iosfwd>
+#include <iterator>
 #include <limits>
 #include <locale>
 #include <map>
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -174,52 +177,7 @@ class AES_256 final : public Block_Cipher_Fixed_Params<16, 32> {
 
 }  // namespace Botan
 
-
 namespace Botan {
-
-/**
- * Reduce the values of @p keys into an accumulator initialized with @p acc using
- * the reducer function @p reducer.
- *
- * The @p reducer is a function taking the accumulator and a single key to return the
- * new accumulator. Keys are consecutively reduced into the accumulator.
- *
- * @return the accumulator containing the reduction of @p keys
- */
-template <typename RetT, typename KeyT, typename ReducerT>
-RetT reduce(const std::vector<KeyT>& keys, RetT acc, ReducerT reducer)
-   requires std::is_convertible_v<ReducerT, std::function<RetT(RetT, const KeyT&)>>
-{
-   for(const KeyT& key : keys) {
-      acc = reducer(std::move(acc), key);
-   }
-   return acc;
-}
-
-/**
-* Existence check for values
-*/
-template <typename T, typename V>
-bool value_exists(const std::vector<T>& vec, const V& val) {
-   for(size_t i = 0; i != vec.size(); ++i) {
-      if(vec[i] == val) {
-         return true;
-      }
-   }
-   return false;
-}
-
-template <typename T, typename Pred>
-void map_remove_if(Pred pred, T& assoc) {
-   auto i = assoc.begin();
-   while(i != assoc.end()) {
-      if(pred(i->first)) {
-         assoc.erase(i++);
-      } else {
-         i++;
-      }
-   }
-}
 
 /**
  * Helper class to ease unmarshalling of concatenated fixed-length values
@@ -275,349 +233,71 @@ class BufferSlicer final {
       std::span<const uint8_t> m_remaining;
 };
 
-/**
- * @brief Helper class to ease in-place marshalling of concatenated fixed-length
- *        values.
- *
- * The size of the final buffer must be known from the start, reallocations are
- * not performed.
- */
-class BufferStuffer final {
-   public:
-      constexpr explicit BufferStuffer(std::span<uint8_t> buffer) : m_buffer(buffer) {}
+}  // namespace Botan
 
-      /**
-       * @returns a span for the next @p bytes bytes in the concatenated buffer.
-       *          Checks that the buffer is not exceeded.
-       */
-      constexpr std::span<uint8_t> next(size_t bytes) {
-         BOTAN_STATE_CHECK(m_buffer.size() >= bytes);
-
-         auto result = m_buffer.first(bytes);
-         m_buffer = m_buffer.subspan(bytes);
-         return result;
-      }
-
-      template <size_t bytes>
-      constexpr std::span<uint8_t, bytes> next() {
-         BOTAN_STATE_CHECK(m_buffer.size() >= bytes);
-
-         auto result = m_buffer.first<bytes>();
-         m_buffer = m_buffer.subspan(bytes);
-         return result;
-      }
-
-      template <concepts::contiguous_strong_type StrongT>
-      StrongSpan<StrongT> next(size_t bytes) {
-         return StrongSpan<StrongT>(next(bytes));
-      }
-
-      /**
-       * @returns a reference to the next single byte in the buffer
-       */
-      constexpr uint8_t& next_byte() { return next(1)[0]; }
-
-      constexpr void append(std::span<const uint8_t> buffer) {
-         auto sink = next(buffer.size());
-         std::copy(buffer.begin(), buffer.end(), sink.begin());
-      }
-
-      constexpr void append(uint8_t b, size_t repeat = 1) {
-         auto sink = next(repeat);
-         std::fill(sink.begin(), sink.end(), b);
-      }
-
-      constexpr bool full() const { return m_buffer.empty(); }
-
-      constexpr size_t remaining_capacity() const { return m_buffer.size(); }
-
-   private:
-      std::span<uint8_t> m_buffer;
-};
-
-namespace detail {
+namespace Botan {
 
 /**
- * Helper function that performs range size-checks as required given the
- * selected output and input range types. If all lengths are known at compile
- * time, this check will be performed at compile time as well. It will then
- * instantiate an output range and concatenate the input ranges' contents.
- */
-template <ranges::spanable_range OutR, ranges::spanable_range... Rs>
-constexpr OutR concatenate(Rs&&... ranges)
-   requires(concepts::reservable_container<OutR> || ranges::statically_spanable_range<OutR>)
-{
-   OutR result{};
-
-   // Prepare and validate the output range and construct a lambda that does the
-   // actual filling of the result buffer.
-   // (if no input ranges are given, GCC claims that fill_fn is unused)
-   [[maybe_unused]] auto fill_fn = [&] {
-      if constexpr(concepts::reservable_container<OutR>) {
-         // dynamically allocate the correct result byte length
-         const size_t total_size = (ranges.size() + ... + 0);
-         result.reserve(total_size);
-
-         // fill the result buffer using a back-inserter
-         return [&result](auto&& range) {
-            std::copy(
-               std::ranges::begin(range), std::ranges::end(range), std::back_inserter(unwrap_strong_type(result)));
-         };
-      } else {
-         if constexpr((ranges::statically_spanable_range<Rs> && ... && true)) {
-            // all input ranges have a static extent, so check the total size at compile time
-            // (work around an issue in MSVC that warns `total_size` is unused)
-            [[maybe_unused]] constexpr size_t total_size = (decltype(std::span{ranges})::extent + ... + 0);
-            static_assert(result.size() == total_size, "size of result buffer does not match the sum of input buffers");
-         } else {
-            // at least one input range has a dynamic extent, so check the total size at runtime
-            const size_t total_size = (ranges.size() + ... + 0);
-            BOTAN_ARG_CHECK(result.size() == total_size,
-                            "result buffer has static extent that does not match the sum of input buffers");
-         }
-
-         // fill the result buffer and hold the current output-iterator position
-         return [itr = std::ranges::begin(result)](auto&& range) mutable {
-            std::copy(std::ranges::begin(range), std::ranges::end(range), itr);
-            std::advance(itr, std::ranges::size(range));
-         };
-      }
-   }();
-
-   // perform the actual concatenation
-   (fill_fn(std::forward<Rs>(ranges)), ...);
-
-   return result;
-}
-
-}  // namespace detail
-
-/**
- * Concatenate an arbitrary number of buffers. Performs range-checks as needed.
- *
- * The output type can be auto-detected based on the input ranges, or explicitly
- * specified by the caller. If all input ranges have a static extent, the total
- * size is calculated at compile time and a statically sized std::array<> is used.
- * Otherwise this tries to use the type of the first input range as output type.
- *
- * Alternatively, the output container type can be specified explicitly.
- */
-template <typename OutR = detail::AutoDetect, ranges::spanable_range... Rs>
-constexpr auto concat(Rs&&... ranges)
-   requires(all_same_v<std::ranges::range_value_t<Rs>...>)
-{
-   if constexpr(std::same_as<detail::AutoDetect, OutR>) {
-      // Try to auto-detect a reasonable output type given the input ranges
-      static_assert(sizeof...(Rs) > 0, "Cannot auto-detect the output type if not a single input range is provided.");
-      using candidate_result_t = std::remove_cvref_t<std::tuple_element_t<0, std::tuple<Rs...>>>;
-      using result_range_value_t = std::remove_cvref_t<std::ranges::range_value_t<candidate_result_t>>;
-
-      if constexpr((ranges::statically_spanable_range<Rs> && ...)) {
-         // If all input ranges have a static extent, we can calculate the total size at compile time
-         // and therefore can use a statically sized output container. This is constexpr.
-         constexpr size_t total_size = (decltype(std::span{ranges})::extent + ... + 0);
-         using out_array_t = std::array<result_range_value_t, total_size>;
-         return detail::concatenate<out_array_t>(std::forward<Rs>(ranges)...);
-      } else {
-         // If at least one input range has a dynamic extent, we must use a dynamically allocated output container.
-         // We assume that the user wants to use the first input range's container type as output type.
-         static_assert(
-            concepts::reservable_container<candidate_result_t>,
-            "First input range has static extent, but a dynamically allocated output range is required. Please explicitly specify a dynamically allocatable output type.");
-         return detail::concatenate<candidate_result_t>(std::forward<Rs>(ranges)...);
-      }
-   } else {
-      // The caller has explicitly specified the output type
-      return detail::concatenate<OutR>(std::forward<Rs>(ranges)...);
-   }
-}
-
-template <typename... Alts, typename... Ts>
-constexpr bool holds_any_of(const std::variant<Ts...>& v) noexcept {
-   return (std::holds_alternative<Alts>(v) || ...);
-}
-
-template <typename GeneralVariantT, typename SpecialT>
-constexpr bool is_generalizable_to(const SpecialT& /*unnamed*/) noexcept {
-   return std::is_constructible_v<GeneralVariantT, SpecialT>;
-}
-
-template <typename GeneralVariantT, typename... SpecialTs>
-constexpr bool is_generalizable_to(const std::variant<SpecialTs...>& /*unnamed*/) noexcept {
-   return (std::is_constructible_v<GeneralVariantT, SpecialTs> && ...);
-}
-
-/**
- * @brief Converts a given variant into another variant-ish whose type states
- *        are a super set of the given variant.
- *
- * This is useful to convert restricted variant types into more general
- * variants types.
- */
-template <typename GeneralVariantT, typename SpecialT>
-constexpr GeneralVariantT generalize_to(SpecialT&& specific)
-   requires(std::is_constructible_v<GeneralVariantT, std::decay_t<SpecialT>>)
-{
-   return std::forward<SpecialT>(specific);
-}
-
-/**
- * @brief Converts a given variant into another variant-ish whose type states
- *        are a super set of the given variant.
- *
- * This is useful to convert restricted variant types into more general
- * variants types.
- */
-template <typename GeneralVariantT, typename... SpecialTs>
-constexpr GeneralVariantT generalize_to(std::variant<SpecialTs...> specific) {
-   static_assert(
-      is_generalizable_to<GeneralVariantT>(specific),
-      "Desired general type must be implicitly constructible by all types of the specialized std::variant<>");
-   return std::visit([](auto s) -> GeneralVariantT { return s; }, std::move(specific));
-}
-
-// This is a helper utility to emulate pattern matching with std::visit.
-// See https://en.cppreference.com/w/cpp/utility/variant/visit for more info.
-template <class... Ts>
-struct overloaded : Ts... {
-      using Ts::operator()...;
-};
-// explicit deduction guide (not needed as of C++20)
-template <class... Ts>
-overloaded(Ts...) -> overloaded<Ts...>;
-
-/**
- * @brief Helper class to create a RAII-style cleanup callback
- *
- * Ensures that the cleanup callback given in the object's constructor is called
- * when the object is destroyed. Use this to ensure some cleanup code runs when
- * leaving the current scope.
- */
-template <std::invocable FunT>
-class scoped_cleanup final {
-   public:
-      explicit scoped_cleanup(FunT cleanup) : m_cleanup(std::move(cleanup)) {}
-
-      scoped_cleanup(const scoped_cleanup&) = delete;
-      scoped_cleanup& operator=(const scoped_cleanup&) = delete;
-
-      scoped_cleanup(scoped_cleanup&& other) noexcept : m_cleanup(std::move(other.m_cleanup)) { other.disengage(); }
-
-      scoped_cleanup& operator=(scoped_cleanup&& other) noexcept {
-         if(this != &other) {
-            m_cleanup = std::move(other.m_cleanup);
-            other.disengage();
-         }
-         return *this;
-      }
-
-      ~scoped_cleanup() {
-         if(m_cleanup.has_value()) {
-            m_cleanup.value()();
-         }
-      }
-
-      /**
-       * Disengage the cleanup callback, i.e., prevent it from being called
-       */
-      void disengage() noexcept { m_cleanup.reset(); }
-
-   private:
-      std::optional<FunT> m_cleanup;
-};
-
-/**
-* Define BOTAN_ASSERT_IS_SOME
+* Zeroize memory contents in a way that a compiler should not elide,
+* using some system specific technique.
+*
+* Use this function to scrub memory just before deallocating it, or on
+* a stack buffer before returning from the function.
+*
+* @param ptr a pointer to memory to scrub
+* @param n the number of bytes pointed to by ptr
 */
-template <typename T>
-T assert_is_some(std::optional<T> v, const char* expr, const char* func, const char* file, int line) {
-   if(v) {
-      return *v;
-   } else {
-      Botan::assertion_failure(expr, "optional had value", func, file, line);
+BOTAN_TEST_API void secure_zeroize_buffer(void* ptr, size_t n);
+
+/**
+ * @param buf a pointer to the start of the region
+ * @param n the number of elements in buf
+ */
+template <std::unsigned_integral T>
+inline void zeroize_buffer(T buf[], size_t n) {
+   if(n > 0) {
+      std::memset(buf, 0, sizeof(T) * n);
    }
 }
 
-// NOLINTNEXTLINE(*-macro-usage)
-#define BOTAN_ASSERT_IS_SOME(v) assert_is_some(v, #v, __func__, __FILE__, __LINE__)
-
-/*
- * @brief Helper class to pass literal strings to C++ templates
- */
-template <size_t N>
-class StringLiteral final {
-   public:
-      // NOLINTNEXTLINE(*-explicit-conversions)
-      constexpr StringLiteral(const char (&str)[N]) : value() { std::copy_n(str, N, value); }
-
-      // NOLINTNEXTLINE(*non-private-member-variable*)
-      char value[N];
-};
-
-// TODO: C++23: replace with std::to_underlying
-template <typename T>
-   requires std::is_enum_v<T>
-auto to_underlying(T e) noexcept {
-   return static_cast<std::underlying_type_t<T>>(e);
+template <std::unsigned_integral T>
+inline void unchecked_copy_memory(T* out, const T* in, size_t n) {
+   if(in != nullptr && out != nullptr && n > 0) {
+      std::memmove(out, in, sizeof(T) * n);
+   }
 }
 
-// TODO: C++23 - use std::out_ptr
-template <typename T>
-[[nodiscard]] constexpr auto out_ptr(T& outptr) noexcept {
-   class out_ptr_t {
-      public:
-         constexpr ~out_ptr_t() noexcept {
-            m_ptr.reset(m_rawptr);
-            m_rawptr = nullptr;
-         }
-
-         // NOLINTNEXTLINE(*-explicit-conversions) FIXME
-         constexpr out_ptr_t(T& outptr) noexcept : m_ptr(outptr), m_rawptr(nullptr) {}
-
-         out_ptr_t(const out_ptr_t&) = delete;
-         out_ptr_t(out_ptr_t&&) = delete;
-         out_ptr_t& operator=(const out_ptr_t&) = delete;
-         out_ptr_t& operator=(out_ptr_t&&) = delete;
-
-         // NOLINTNEXTLINE(*-explicit-conversions) FIXME
-         [[nodiscard]] constexpr operator typename T::element_type **() && noexcept { return &m_rawptr; }
-
-      private:
-         T& m_ptr;
-         typename T::element_type* m_rawptr;
-   };
-
-   return out_ptr_t{outptr};
+/**
+* Return true if any of the provided arguments are null
+*/
+template <typename... Ptrs>
+bool any_null_pointers(Ptrs... ptr) {
+   static_assert((... && std::is_pointer_v<Ptrs>), "All arguments must be pointers");
+   return (... || (ptr == nullptr));
 }
 
-template <typename T>
-   requires std::is_default_constructible_v<T>
-[[nodiscard]] constexpr auto out_opt(std::optional<T>& outopt) noexcept {
-   class out_opt_t {
-      public:
-         constexpr ~out_opt_t() noexcept { m_opt = m_raw; }
+inline std::span<const uint8_t> as_span_of_bytes(const char* s, size_t len) {
+   const uint8_t* b = reinterpret_cast<const uint8_t*>(s);
+   return std::span{b, len};
+}
 
-         // NOLINTNEXTLINE(*-explicit-conversions) FIXME
-         constexpr out_opt_t(std::optional<T>& outopt) noexcept : m_opt(outopt) {}
+inline std::span<const uint8_t> as_span_of_bytes(const std::string& s) {
+   return as_span_of_bytes(s.data(), s.size());
+}
 
-         out_opt_t(const out_opt_t&) = delete;
-         out_opt_t(out_opt_t&&) = delete;
-         out_opt_t& operator=(const out_opt_t&) = delete;
-         out_opt_t& operator=(out_opt_t&&) = delete;
+inline std::span<const uint8_t> as_span_of_bytes(std::string_view s) {
+   return as_span_of_bytes(s.data(), s.size());
+}
 
-         // NOLINTNEXTLINE(*-explicit-conversions) FIXME
-         [[nodiscard]] constexpr operator T*() && noexcept { return &m_raw; }
+inline std::span<const uint8_t> cstr_as_span_of_bytes(const char* s) {
+   return as_span_of_bytes(s, std::strlen(s));
+}
 
-      private:
-         std::optional<T>& m_opt;
-         T m_raw;
-   };
-
-   return out_opt_t{outopt};
+inline std::string bytes_to_string(std::span<const uint8_t> bytes) {
+   return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
 }  // namespace Botan
-
 
 namespace Botan {
 
@@ -664,7 +344,7 @@ class AlignmentBuffer {
    public:
       AlignmentBuffer() = default;
 
-      ~AlignmentBuffer() { secure_scrub_memory(m_buffer.data(), m_buffer.size()); }
+      ~AlignmentBuffer() { secure_zeroize_buffer(m_buffer.data(), sizeof(T) * m_buffer.size()); }
 
       AlignmentBuffer(const AlignmentBuffer& other) = default;
       AlignmentBuffer(AlignmentBuffer&& other) noexcept = default;
@@ -672,7 +352,7 @@ class AlignmentBuffer {
       AlignmentBuffer& operator=(AlignmentBuffer&& other) noexcept = default;
 
       void clear() {
-         clear_mem(m_buffer.data(), m_buffer.size());
+         zeroize_buffer(m_buffer.data(), m_buffer.size());
          m_position = 0;
       }
 
@@ -681,7 +361,7 @@ class AlignmentBuffer {
        */
       void fill_up_with_zeros() {
          if(!ready_to_consume()) {
-            clear_mem(&m_buffer[m_position], elements_until_alignment());
+            zeroize_buffer(&m_buffer[m_position], elements_until_alignment());
             m_position = m_buffer.size();
          }
       }
@@ -959,14 +639,158 @@ inline constexpr T reverse_bytes(T x) {
 
 }  // namespace Botan
 
+/**
+* @file  target_info.h
+*
+* Automatically generated from
+* 'configure.py --with-build-dir=build-minimal-amalg --disable-deprecated-features --minimized-build --amalgamation --disable-shared --cc=clang --cc-bin=/usr/bin/clang++-18 '--cxxflags=-stdlib=libc++ -I/usr/lib/llvm-18/include/c++/v1' '--ldflags=-stdlib=libc++ -L/usr/lib/llvm-18/lib -Wl,-rpath,/usr/lib/llvm-18/lib -lc++ -lc++abi' --enable-modules=ml_kem,x25519,x448,chacha20poly1305,aes,gcm,sha2_32,sha2_64,blake2,blake2s,system_rng,hex,hkdf,aes*,ghash*,sha2_32*,sha2_64*,chacha*'
+*
+* Target
+*  - Compiler: /usr/bin/clang++-18 -fstack-protector -pthread -std=c++20 -D_REENTRANT -stdlib=libc++ -I/usr/lib/llvm-18/include/c++/v1
+*  - Arch: arm64
+*  - OS: linux
+*/
+
+/* NOLINTBEGIN(*-macro-usage,*-macro-to-enum) */
+
+/*
+* Configuration
+*/
+#define BOTAN_CT_VALUE_BARRIER_USE_ASM
+
+[[maybe_unused]] static constexpr bool OptimizeForSize = false;
+
+
+
+/*
+* Compiler Information
+*/
+#define BOTAN_BUILD_COMPILER_IS_CLANG
+
+#define BOTAN_COMPILER_INVOCATION_STRING "/usr/bin/clang++-18 -fstack-protector -pthread -stdlib=libc++ -I/usr/lib/llvm-18/include/c++/v1"
+
+#define BOTAN_USE_GCC_INLINE_ASM
+
+
+/*
+* External tool settings
+*/
+
+
+
+
+/*
+* CPU feature information
+*/
+#define BOTAN_TARGET_ARCH "arm64"
+
+#define BOTAN_TARGET_ARCH_IS_ARM64
+
+#define BOTAN_TARGET_ARCH_IS_ARM_FAMILY
+
+#define BOTAN_TARGET_ARCH_SUPPORTS_ARMV8CRYPTO
+#define BOTAN_TARGET_ARCH_SUPPORTS_ARMV8SHA512
+#define BOTAN_TARGET_ARCH_SUPPORTS_ARMV8SM3
+#define BOTAN_TARGET_ARCH_SUPPORTS_ARMV8SM4
+#define BOTAN_TARGET_ARCH_SUPPORTS_NEON
+
+
+/*
+* Operating system information
+*/
+#define BOTAN_TARGET_OS_IS_LINUX
+
+#define BOTAN_TARGET_OS_HAS_ATOMICS
+#define BOTAN_TARGET_OS_HAS_CLOCK_GETTIME
+#define BOTAN_TARGET_OS_HAS_DEV_RANDOM
+#define BOTAN_TARGET_OS_HAS_EXPLICIT_BZERO
+#define BOTAN_TARGET_OS_HAS_GETAUXVAL
+#define BOTAN_TARGET_OS_HAS_GETENTROPY
+#define BOTAN_TARGET_OS_HAS_GETRANDOM
+#define BOTAN_TARGET_OS_HAS_POSIX1
+#define BOTAN_TARGET_OS_HAS_POSIX_MLOCK
+#define BOTAN_TARGET_OS_HAS_PRCTL
+#define BOTAN_TARGET_OS_HAS_SOCKETS
+#define BOTAN_TARGET_OS_HAS_SYSTEM_CLOCK
+#define BOTAN_TARGET_OS_HAS_THREAD_LOCAL
+
+
+/*
+* System paths
+*/
+#define BOTAN_INSTALL_PREFIX R"(/usr/local)"
+#define BOTAN_INSTALL_HEADER_DIR R"(include/botan-3)"
+#define BOTAN_INSTALL_LIB_DIR R"(/usr/local/lib)"
+#define BOTAN_LIB_LINK ""
+#define BOTAN_LINK_FLAGS "-fstack-protector -pthread"
+
+#define BOTAN_SYSTEM_CERT_BUNDLE "/etc/ssl/certs/ca-certificates.crt"
+
+/* NOLINTEND(*-macro-usage,*-macro-to-enum) */
+
+namespace Botan::CT {
+
+/**
+* This function returns its argument, but (if called in a non-constexpr context)
+* attempts to prevent the compiler from reasoning about the value or the possible
+* range of values. Such optimizations have a way of breaking constant time code.
+*
+* The method that is use is decided at configuration time based on the target
+* compiler and architecture (see `ct_value_barrier` blocks in `src/build-data/cc`).
+* The decision can be overridden by the user with the configure.py option
+* `--ct-value-barrier-type=`
+*
+* There are three options currently possible in the data files and with the
+* option:
+*
+*  * `asm`: Use an inline assembly expression which (currently) prevents Clang
+*    and GCC from optimizing based on the possible value of the input expression.
+*
+*  * `volatile`: Launder the input through a volatile variable. This is likely
+*    to cause significant performance regressions since the value must be
+*    actually stored and loaded back from memory each time.
+*
+*  * `none`: disable constant time barriers entirely. This is used
+*    with MSVC, which is not known to perform optimizations that break
+*    constant time code and which does not support GCC-style inline asm.
+*
+*/
+template <std::unsigned_integral T>
+   requires(!std::same_as<bool, T>)
+constexpr inline T value_barrier(T x) {
+   if(std::is_constant_evaluated()) {
+      return x;
+   } else {
+#if defined(BOTAN_CT_VALUE_BARRIER_USE_ASM)
+      /*
+      * We may want a "stronger" statement such as
+      *     asm volatile("" : "+r,m"(x) : : "memory);
+      * (see https://theunixzoo.co.uk/blog/2021-10-14-preventing-optimisations.html)
+      * however the current approach seems sufficient with current compilers,
+      * and is minimally damaging with regards to degrading code generation.
+      */
+      asm("" : "+r"(x) : /* no input */);  // NOLINT(*-no-assembler)
+      return x;
+#elif defined(BOTAN_CT_VALUE_BARRIER_USE_VOLATILE)
+      volatile T vx = x;
+      return vx;
+#else
+      return x;
+#endif
+   }
+}
+
+}  // namespace Botan::CT
+
 namespace Botan {
 
 /**
 * If top bit of arg is set, return |1| (all bits set). Otherwise return |0| (all bits unset)
 */
 template <std::unsigned_integral T>
-BOTAN_FORCE_INLINE constexpr T expand_top_bit(T a) {
-   return static_cast<T>(0) - (a >> (sizeof(T) * 8 - 1));
+BOTAN_FORCE_INLINE constexpr T ct_expand_top_bit(T a) {
+   const T top = CT::value_barrier<T>(a >> (sizeof(T) * 8 - 1));
+   return static_cast<T>(0) - top;
 }
 
 /**
@@ -974,7 +798,7 @@ BOTAN_FORCE_INLINE constexpr T expand_top_bit(T a) {
 */
 template <std::unsigned_integral T>
 BOTAN_FORCE_INLINE constexpr T ct_is_zero(T x) {
-   return expand_top_bit<T>(~x & (x - 1));
+   return ct_expand_top_bit<T>(~x & (x - 1));
 }
 
 /**
@@ -982,8 +806,13 @@ BOTAN_FORCE_INLINE constexpr T ct_is_zero(T x) {
 */
 template <std::unsigned_integral T>
 BOTAN_FORCE_INLINE constexpr size_t ct_if_is_zero_ret(T x, size_t s) {
+   /*
+   Similar to `return ct_is_zero(x) & s` but has to account for possibility that
+   sizeof(T) is smaller than sizeof(size_t) which would lead to incomplete masking
+   */
    const T a = ~x & (x - 1);
-   const size_t mask = static_cast<size_t>(0) - static_cast<size_t>(a >> (sizeof(T) * 8 - 1));
+   const size_t a_top = static_cast<size_t>(CT::value_barrier<T>(a >> (sizeof(T) * 8 - 1)));
+   const size_t mask = static_cast<size_t>(0) - a_top;
    return mask & s;
 }
 
@@ -1223,11 +1052,44 @@ BOTAN_FORCE_INLINE constexpr uint8_t ct_popcount(T x) {
    }
 }
 
+/**
+* Compile-time polynomial multiplication in GF(2^8) modulo an irreducible
+* polynomial POLY
+*
+* When T is larger than a byte, the function computes the product of each byte
+* of T and returns the packed result.
+*
+* This function is intended only for use at compile-time, and in particular
+* should not be used with secret inputs.
+*
+* TODO(Botan4) this function should be consteval, but that hits bugs in
+* older versions of GCC and Clang.
+*/
+template <uint8_t POLY, std::unsigned_integral T>
+constexpr T poly_mul(T x, uint8_t y) {
+   // The constant 0x010101... as a T
+   constexpr T lo_bit = (static_cast<T>(-1) / 255);
+
+   // The constant 0x7F7F7F... as a T
+   constexpr T mask = static_cast<T>(~(lo_bit << 7));
+
+   constexpr T poly = POLY;
+
+   T r = 0;
+   while(x > 0 && y > 0) {
+      if((y & 1) != 0) {
+         r ^= x;
+      }
+      const T carry = ((x >> 7) & lo_bit) * poly;
+      x = ((x & mask) << 1) ^ carry;
+      y >>= 1;
+   }
+   return r;
+}
+
 }  // namespace Botan
 
 namespace Botan {
-
-class BLAKE2bMAC;
 
 constexpr size_t BLAKE2B_BLOCKBYTES = 128;
 
@@ -1325,6 +1187,70 @@ class BLAKE2s final : public HashFunction {
 
       std::array<uint32_t, 8> m_h{};  // chained state
       size_t m_outlen = 0;            // digest size
+};
+
+}  // namespace Botan
+
+namespace Botan {
+
+/**
+ * @brief Helper class to ease in-place marshalling of concatenated fixed-length
+ *        values.
+ *
+ * The size of the final buffer must be known from the start, reallocations are
+ * not performed.
+ */
+class BufferStuffer final {
+   public:
+      constexpr explicit BufferStuffer(std::span<uint8_t> buffer) : m_buffer(buffer) {}
+
+      /**
+       * @returns a span for the next @p bytes bytes in the concatenated buffer.
+       *          Checks that the buffer is not exceeded.
+       */
+      constexpr std::span<uint8_t> next(size_t bytes) {
+         BOTAN_STATE_CHECK(m_buffer.size() >= bytes);
+
+         auto result = m_buffer.first(bytes);
+         m_buffer = m_buffer.subspan(bytes);
+         return result;
+      }
+
+      template <size_t bytes>
+      constexpr std::span<uint8_t, bytes> next() {
+         BOTAN_STATE_CHECK(m_buffer.size() >= bytes);
+
+         auto result = m_buffer.first<bytes>();
+         m_buffer = m_buffer.subspan(bytes);
+         return result;
+      }
+
+      template <concepts::contiguous_strong_type StrongT>
+      StrongSpan<StrongT> next(size_t bytes) {
+         return StrongSpan<StrongT>(next(bytes));
+      }
+
+      /**
+       * @returns a reference to the next single byte in the buffer
+       */
+      constexpr uint8_t& next_byte() { return next(1)[0]; }
+
+      constexpr void append(std::span<const uint8_t> buffer) {
+         auto sink = next(buffer.size());
+         std::copy(buffer.begin(), buffer.end(), sink.begin());
+      }
+
+      constexpr void append(uint8_t b, size_t repeat = 1) {
+         auto sink = next(repeat);
+         std::fill(sink.begin(), sink.end(), b);
+      }
+
+      constexpr bool full() const { return m_buffer.empty(); }
+
+      constexpr size_t remaining_capacity() const { return m_buffer.size(); }
+
+   private:
+      std::span<uint8_t> m_buffer;
 };
 
 }  // namespace Botan
@@ -1578,12 +1504,33 @@ namespace Botan {
 BOTAN_TEST_API std::string ucs2_to_utf8(const uint8_t ucs2[], size_t len);
 
 /**
+ * Convert a UTF-8 string to a sequence of UCS-2 (big endian) characters
+ * This is used for ASN.1 BMPString type
+ * @param utf8 the UTF-8 string
+ * @return a vector of bytes containing the UCS-2 (big endian) encoding
+ * @throws Decoding_Error if the input is not valid UTF-8 (including overlong encodings,
+ *         surrogate code points, or values outside Unicode), or if a code point exceeds
+ *         U+FFFF and cannot be represented in UCS-2
+ */
+BOTAN_TEST_API std::vector<uint8_t> utf8_to_ucs2(const std::string& utf8);
+
+/**
 * Convert a sequence of UCS-4 (big endian) characters to a UTF-8 string
 * This is used for ASN.1 UniversalString type
 * @param ucs4 the sequence of UCS-4 characters
 * @param len length of ucs4 in bytes, must be a multiple of 4
 */
 BOTAN_TEST_API std::string ucs4_to_utf8(const uint8_t ucs4[], size_t len);
+
+/**
+ * Convert a UTF-8 string to a sequence of UCS-4 (big endian) characters
+ * This is used for ASN.1 UniversalString type
+ * @param utf8 the UTF-8 string
+ * @return a vector of bytes containing the UCS-4 (big endian) encoding
+ * @throws Decoding_Error if the input is not valid UTF-8 (including overlong encodings,
+ *         surrogate code points, or values outside the Unicode scalar value range U+0000..U+10FFFF)
+ */
+BOTAN_TEST_API std::vector<uint8_t> utf8_to_ucs4(const std::string& utf8);
 
 BOTAN_TEST_API std::string latin1_to_utf8(const uint8_t latin1[], size_t len);
 
@@ -1755,7 +1702,7 @@ size_t base_decode(const Base& base,
       ++input_consumed;
    }
 
-   size_t written = (out_ptr - output) - base.bytes_to_remove(final_truncate);
+   const size_t written = (out_ptr - output) - base.bytes_to_remove(final_truncate);
 
    return written;
 }
@@ -1785,94 +1732,106 @@ Vector base_decode_to_vec(const Base& base, const char input[], size_t input_len
 
 }  // namespace Botan
 
+namespace Botan {
+
+namespace detail {
+
 /**
-* @file  target_info.h
-*
-* Automatically generated from
-* 'configure.py --with-build-dir=build-minimal-amalg --disable-deprecated-features --minimized-build --amalgamation --disable-shared --cc=clang --cc-bin=/usr/bin/clang++-18 '--cxxflags=-stdlib=libc++ -I/usr/lib/llvm-18/include/c++/v1' '--ldflags=-stdlib=libc++ -L/usr/lib/llvm-18/lib -Wl,-rpath,/usr/lib/llvm-18/lib -lc++ -lc++abi' --enable-modules=ml_kem,x25519,x448,chacha20poly1305,aes,gcm,sha2_32,sha2_64,blake2,blake2s,system_rng,hex,hkdf,aes*,ghash*,sha2_32*,sha2_64*,chacha*'
-*
-* Target
-*  - Compiler: /usr/bin/clang++-18 -fstack-protector -pthread -std=c++20 -D_REENTRANT -stdlib=libc++ -I/usr/lib/llvm-18/include/c++/v1
-*  - Arch: arm64
-*  - OS: linux
-*/
+ * Helper function that performs range size-checks as required given the
+ * selected output and input range types. If all lengths are known at compile
+ * time, this check will be performed at compile time as well. It will then
+ * instantiate an output range and concatenate the input ranges' contents.
+ */
+template <ranges::spanable_range OutR, ranges::spanable_range... Rs>
+constexpr OutR concatenate(Rs&&... ranges)
+   requires(concepts::reservable_container<OutR> || ranges::statically_spanable_range<OutR>)
+{
+   OutR result{};
 
-/* NOLINTBEGIN(*-macro-usage,*-macro-to-enum) */
+   // Prepare and validate the output range and construct a lambda that does the
+   // actual filling of the result buffer.
+   // (if no input ranges are given, GCC claims that fill_fn is unused)
+   [[maybe_unused]] auto fill_fn = [&] {
+      if constexpr(concepts::reservable_container<OutR>) {
+         // dynamically allocate the correct result byte length
+         const size_t total_size = (ranges.size() + ... + 0);
+         result.reserve(total_size);
 
-/*
-* Configuration
-*/
-#define BOTAN_CT_VALUE_BARRIER_USE_ASM
+         // fill the result buffer using a back-inserter
+         return [&result](auto&& range) {
+            std::copy(
+               std::ranges::begin(range), std::ranges::end(range), std::back_inserter(unwrap_strong_type(result)));
+         };
+      } else {
+         if constexpr((ranges::statically_spanable_range<Rs> && ... && true)) {
+            // all input ranges have a static extent, so check the total size at compile time
+            // (work around an issue in MSVC that warns `total_size` is unused)
+            [[maybe_unused]] constexpr size_t total_size = (decltype(std::span{ranges})::extent + ... + 0);
+            static_assert(result.size() == total_size, "size of result buffer does not match the sum of input buffers");
+         } else {
+            // at least one input range has a dynamic extent, so check the total size at runtime
+            const size_t total_size = (ranges.size() + ... + 0);
+            BOTAN_ARG_CHECK(result.size() == total_size,
+                            "result buffer has static extent that does not match the sum of input buffers");
+         }
 
-[[maybe_unused]] static constexpr bool OptimizeForSize = false;
+         // fill the result buffer and hold the current output-iterator position
+         return [itr = std::ranges::begin(result)](auto&& range) mutable {
+            std::copy(std::ranges::begin(range), std::ranges::end(range), itr);
+            std::advance(itr, std::ranges::size(range));
+         };
+      }
+   }();
 
+   // perform the actual concatenation
+   (fill_fn(std::forward<Rs>(ranges)), ...);
 
+   return result;
+}
 
-/*
-* Compiler Information
-*/
-#define BOTAN_BUILD_COMPILER_IS_CLANG
+}  // namespace detail
 
-#define BOTAN_COMPILER_INVOCATION_STRING "/usr/bin/clang++-18 -fstack-protector -pthread -stdlib=libc++ -I/usr/lib/llvm-18/include/c++/v1"
+/**
+ * Concatenate an arbitrary number of buffers. Performs range-checks as needed.
+ *
+ * The output type can be auto-detected based on the input ranges, or explicitly
+ * specified by the caller. If all input ranges have a static extent, the total
+ * size is calculated at compile time and a statically sized std::array<> is used.
+ * Otherwise this tries to use the type of the first input range as output type.
+ *
+ * Alternatively, the output container type can be specified explicitly.
+ */
+template <typename OutR = detail::AutoDetect, ranges::spanable_range... Rs>
+constexpr auto concat(Rs&&... ranges)
+   requires(all_same_v<std::ranges::range_value_t<Rs>...>)
+{
+   if constexpr(std::same_as<detail::AutoDetect, OutR>) {
+      // Try to auto-detect a reasonable output type given the input ranges
+      static_assert(sizeof...(Rs) > 0, "Cannot auto-detect the output type if not a single input range is provided.");
+      using candidate_result_t = std::remove_cvref_t<std::tuple_element_t<0, std::tuple<Rs...>>>;
+      using result_range_value_t = std::remove_cvref_t<std::ranges::range_value_t<candidate_result_t>>;
 
-#define BOTAN_USE_GCC_INLINE_ASM
+      if constexpr((ranges::statically_spanable_range<Rs> && ...)) {
+         // If all input ranges have a static extent, we can calculate the total size at compile time
+         // and therefore can use a statically sized output container. This is constexpr.
+         constexpr size_t total_size = (decltype(std::span{ranges})::extent + ... + 0);
+         using out_array_t = std::array<result_range_value_t, total_size>;
+         return detail::concatenate<out_array_t>(std::forward<Rs>(ranges)...);
+      } else {
+         // If at least one input range has a dynamic extent, we must use a dynamically allocated output container.
+         // We assume that the user wants to use the first input range's container type as output type.
+         static_assert(
+            concepts::reservable_container<candidate_result_t>,
+            "First input range has static extent, but a dynamically allocated output range is required. Please explicitly specify a dynamically allocatable output type.");
+         return detail::concatenate<candidate_result_t>(std::forward<Rs>(ranges)...);
+      }
+   } else {
+      // The caller has explicitly specified the output type
+      return detail::concatenate<OutR>(std::forward<Rs>(ranges)...);
+   }
+}
 
-
-/*
-* External tool settings
-*/
-
-
-
-
-/*
-* CPU feature information
-*/
-#define BOTAN_TARGET_ARCH "arm64"
-
-#define BOTAN_TARGET_ARCH_IS_ARM64
-
-#define BOTAN_TARGET_ARCH_IS_ARM_FAMILY
-
-#define BOTAN_TARGET_ARCH_SUPPORTS_ARMV8CRYPTO
-#define BOTAN_TARGET_ARCH_SUPPORTS_ARMV8SHA512
-#define BOTAN_TARGET_ARCH_SUPPORTS_ARMV8SM3
-#define BOTAN_TARGET_ARCH_SUPPORTS_ARMV8SM4
-#define BOTAN_TARGET_ARCH_SUPPORTS_NEON
-
-
-/*
-* Operating system information
-*/
-#define BOTAN_TARGET_OS_IS_LINUX
-
-#define BOTAN_TARGET_OS_HAS_ATOMICS
-#define BOTAN_TARGET_OS_HAS_CLOCK_GETTIME
-#define BOTAN_TARGET_OS_HAS_DEV_RANDOM
-#define BOTAN_TARGET_OS_HAS_EXPLICIT_BZERO
-#define BOTAN_TARGET_OS_HAS_GETAUXVAL
-#define BOTAN_TARGET_OS_HAS_GETENTROPY
-#define BOTAN_TARGET_OS_HAS_GETRANDOM
-#define BOTAN_TARGET_OS_HAS_POSIX1
-#define BOTAN_TARGET_OS_HAS_POSIX_MLOCK
-#define BOTAN_TARGET_OS_HAS_PRCTL
-#define BOTAN_TARGET_OS_HAS_SOCKETS
-#define BOTAN_TARGET_OS_HAS_SYSTEM_CLOCK
-#define BOTAN_TARGET_OS_HAS_THREAD_LOCAL
-
-
-/*
-* System paths
-*/
-#define BOTAN_INSTALL_PREFIX R"(/usr/local)"
-#define BOTAN_INSTALL_HEADER_DIR R"(include/botan-3)"
-#define BOTAN_INSTALL_LIB_DIR R"(/usr/local/lib)"
-#define BOTAN_LIB_LINK ""
-#define BOTAN_LINK_FLAGS "-fstack-protector -pthread"
-
-#define BOTAN_SYSTEM_CERT_BUNDLE "/etc/ssl/certs/ca-certificates.crt"
-
-/* NOLINTEND(*-macro-usage,*-macro-to-enum) */
+}  // namespace Botan
 
 #if defined(BOTAN_HAS_CPUID_DETECTION)
 
@@ -2056,6 +2015,50 @@ class BOTAN_TEST_API CPUID final {
 
 }  // namespace Botan
 
+namespace Botan {
+
+/**
+ * @brief Helper class to create a RAII-style cleanup callback
+ *
+ * Ensures that the cleanup callback given in the object's constructor is called
+ * when the object is destroyed. Use this to ensure some cleanup code runs when
+ * leaving the current scope.
+ */
+template <std::invocable FunT>
+class scoped_cleanup final {
+   public:
+      explicit scoped_cleanup(FunT cleanup) : m_cleanup(std::move(cleanup)) {}
+
+      scoped_cleanup(const scoped_cleanup&) = delete;
+      scoped_cleanup& operator=(const scoped_cleanup&) = delete;
+
+      scoped_cleanup(scoped_cleanup&& other) noexcept : m_cleanup(std::move(other.m_cleanup)) { other.disengage(); }
+
+      scoped_cleanup& operator=(scoped_cleanup&& other) noexcept {
+         if(this != &other) {
+            m_cleanup = std::move(other.m_cleanup);
+            other.disengage();
+         }
+         return *this;
+      }
+
+      ~scoped_cleanup() {
+         if(m_cleanup.has_value()) {
+            (*m_cleanup)();  // NOLINT(bugprone-exception-escape) clang-tidy bug
+         }
+      }
+
+      /**
+       * Disengage the cleanup callback, i.e., prevent it from being called
+       */
+      void disengage() noexcept { m_cleanup.reset(); }
+
+   private:
+      std::optional<FunT> m_cleanup;
+};
+
+}  // namespace Botan
+
 
 #if defined(BOTAN_HAS_VALGRIND)
    #include <valgrind/memcheck.h>
@@ -2150,14 +2153,14 @@ constexpr void unpoison(const T& p) {
 template <ranges::spanable_range R>
    requires std::is_trivially_copyable_v<std::ranges::range_value_t<R>> && (!custom_poisonable<R>)
 constexpr void poison(const R& r) {
-   std::span s{r};
+   const std::span s{r};
    poison(s.data(), s.size());
 }
 
 template <ranges::spanable_range R>
    requires std::is_trivially_copyable_v<std::ranges::range_value_t<R>> && (!custom_unpoisonable<R>)
 constexpr void unpoison(const R& r) {
-   std::span s{r};
+   const std::span s{r};
    unpoison(s.data(), s.size());
 }
 
@@ -2182,7 +2185,7 @@ template <typename T>
    requires requires(const T& v) { ::Botan::CT::poison(v); }
 constexpr void poison(const std::optional<T>& x) {
    if(x.has_value()) {
-      poison(x.value());
+      poison(*x);
    }
 }
 
@@ -2190,7 +2193,7 @@ template <typename T>
    requires requires(const T& v) { ::Botan::CT::unpoison(v); }
 constexpr void unpoison(const std::optional<T>& x) {
    if(x.has_value()) {
-      unpoison(x.value());
+      unpoison(*x);
    }
 }
 
@@ -2281,56 +2284,6 @@ template <unpoisonable T>
 /// @}
 
 /**
-* This function returns its argument, but (if called in a non-constexpr context)
-* attempts to prevent the compiler from reasoning about the value or the possible
-* range of values. Such optimizations have a way of breaking constant time code.
-*
-* The method that is use is decided at configuration time based on the target
-* compiler and architecture (see `ct_value_barrier` blocks in `src/build-data/cc`).
-* The decision can be overridden by the user with the configure.py option
-* `--ct-value-barrier-type=`
-*
-* There are three options currently possible in the data files and with the
-* option:
-*
-*  * `asm`: Use an inline assembly expression which (currently) prevents Clang
-*    and GCC from optimizing based on the possible value of the input expression.
-*
-*  * `volatile`: Launder the input through a volatile variable. This is likely
-*    to cause significant performance regressions since the value must be
-*    actually stored and loaded back from memory each time.
-*
-*  * `none`: disable constant time barriers entirely. This is used
-*    with MSVC, which is not known to perform optimizations that break
-*    constant time code and which does not support GCC-style inline asm.
-*
-*/
-template <std::unsigned_integral T>
-   requires(!std::same_as<bool, T>)
-constexpr inline T value_barrier(T x) {
-   if(std::is_constant_evaluated()) {
-      return x;
-   } else {
-#if defined(BOTAN_CT_VALUE_BARRIER_USE_ASM)
-      /*
-      * We may want a "stronger" statement such as
-      *     asm volatile("" : "+r,m"(x) : : "memory);
-      * (see https://theunixzoo.co.uk/blog/2021-10-14-preventing-optimisations.html)
-      * however the current approach seems sufficient with current compilers,
-      * and is minimally damaging with regards to degrading code generation.
-      */
-      asm("" : "+r"(x) : /* no input */);  // NOLINT(*-no-assembler)
-      return x;
-#elif defined(BOTAN_CT_VALUE_BARRIER_USE_VOLATILE)
-      volatile T vx = x;
-      return vx;
-#else
-      return x;
-#endif
-   }
-}
-
-/**
 * A Choice is used for constant-time conditionals.
 *
 * Internally it always is either |0| (all 0 bits) or |1| (all 1 bits)
@@ -2339,31 +2292,51 @@ constexpr inline T value_barrier(T x) {
 */
 class Choice final {
    public:
+      using underlying_type = word;
+
       /**
       * If v == 0 return an unset (false) Choice, otherwise a set Choice
       */
       template <typename T>
          requires std::unsigned_integral<T> && (!std::same_as<bool, T>)
       constexpr static Choice from_int(T v) {
-         // Mask of T that is either |0| or |1|
-         const T v_is_0 = ct_is_zero<T>(value_barrier<T>(v));
+         if constexpr(sizeof(T) <= sizeof(underlying_type)) {
+            return !Choice(ct_is_zero<underlying_type>(v));
+         } else {
+            // Mask of T that is either |0| or |1|
+            const T v_is_0 = ct_is_zero<T>(value_barrier<T>(v));
 
-         // We want the mask to be set if v != 0 so we must check that
-         // v_is_0 is itself zero.
-         //
-         // Also sizeof(T) may not equal sizeof(uint32_t) so we must
-         // use ct_is_zero<uint32_t>. It's ok to either truncate or
-         // zero extend v_is_0 to 32 bits since we know it is |0| or |1|
-         // so even just the low bit is sufficient.
-         return Choice(ct_is_zero<uint32_t>(static_cast<uint32_t>(v_is_0)));
+            // We want the mask to be set if v != 0 so we must check that
+            // v_is_0 is itself zero.
+            //
+            // Also sizeof(T) may not equal sizeof(underlying_type) so we must
+            // use ct_is_zero<underlying_type>. It's ok to either truncate or
+            // zero extend v_is_0 to 32 bits since we know it is |0| or |1|
+            // so even just the low bit is sufficient.
+            return Choice(ct_is_zero<underlying_type>(static_cast<underlying_type>(v_is_0)));
+         }
+      }
+
+      /**
+      * Return a bitmask |1| if the choice is set, or |0| otherwise
+      */
+      template <typename T>
+         requires std::unsigned_integral<T> && (!std::same_as<bool, T>)
+      constexpr T into_bitmask() const {
+         if constexpr(sizeof(T) <= sizeof(underlying_type)) {
+            // The inner mask is already |0| or |1| so just truncate
+            return static_cast<T>(value());
+         } else {
+            return ~ct_is_zero<T>(value());
+         }
       }
 
       /**
       * Create a Choice directly from a mask value - this assumes v is either |0| or |1|
       */
-      constexpr static Choice from_mask(uint32_t v) { return Choice(v); }
+      constexpr static Choice from_mask(underlying_type v) { return Choice(v); }
 
-      constexpr static Choice yes() { return Choice(static_cast<uint32_t>(-1)); }
+      constexpr static Choice yes() { return !no(); }
 
       constexpr static Choice no() { return Choice(0); }
 
@@ -2390,7 +2363,7 @@ class Choice final {
       constexpr bool as_bool() const { return m_value != 0; }
 
       /// Return the masked value
-      constexpr uint32_t value() const { return value_barrier(m_value); }
+      constexpr underlying_type value() const { return value_barrier(m_value); }
 
       constexpr Choice(const Choice& other) = default;
       constexpr Choice(Choice&& other) = default;
@@ -2399,9 +2372,9 @@ class Choice final {
       constexpr ~Choice() = default;
 
    private:
-      constexpr explicit Choice(uint32_t v) : m_value(v) {}
+      constexpr explicit Choice(underlying_type v) : m_value(CT::value_barrier<underlying_type>(v)) {}
 
-      uint32_t m_value;
+      underlying_type m_value;
 };
 
 /**
@@ -2461,7 +2434,7 @@ class Mask final {
       * Return a Mask<T> which is set if choice is set
       */
       static constexpr Mask<T> from_choice(Choice c) {
-         if constexpr(sizeof(T) <= sizeof(uint32_t)) {
+         if constexpr(sizeof(T) <= sizeof(Choice::underlying_type)) {
             // Take advantage of the fact that Choice's mask is always
             // either |0| or |1|
             return Mask<T>(static_cast<T>(c.value()));
@@ -2473,7 +2446,7 @@ class Mask final {
       /**
       * Return a Mask<T> which is set if the top bit of v is set
       */
-      static constexpr Mask<T> expand_top_bit(T v) { return Mask<T>(Botan::expand_top_bit<T>(value_barrier<T>(v))); }
+      static constexpr Mask<T> expand_top_bit(T v) { return Mask<T>(ct_expand_top_bit<T>(v)); }
 
       /**
        * Return a Mask<T> which is set if the given @p bit of @p v is set.
@@ -2678,8 +2651,8 @@ class Mask final {
       * Return a Choice based on this mask
       */
       constexpr CT::Choice as_choice() const {
-         if constexpr(sizeof(T) >= sizeof(uint32_t)) {
-            return CT::Choice::from_mask(static_cast<uint32_t>(unpoisoned_value()));
+         if constexpr(sizeof(T) >= sizeof(Choice::underlying_type)) {
+            return CT::Choice::from_mask(static_cast<Choice::underlying_type>(unpoisoned_value()));
          } else {
             return CT::Choice::from_int(unpoisoned_value());
          }
@@ -2970,6 +2943,14 @@ class CTR_BE final : public StreamCipher {
       void set_iv_bytes(const uint8_t iv[], size_t iv_len) override;
       void add_counter(uint64_t counter);
 
+#if defined(BOTAN_HAS_CTR_BE_AVX2)
+      size_t ctr_proc_bs16_ctr4_avx2(const uint8_t in[], uint8_t out[], size_t length);
+#endif
+
+#if defined(BOTAN_HAS_CTR_BE_SIMD32)
+      size_t ctr_proc_bs16_ctr4_simd32(const uint8_t in[], uint8_t out[], size_t length);
+#endif
+
       std::unique_ptr<BlockCipher> m_cipher;
 
       const size_t m_block_size;
@@ -3046,14 +3027,14 @@ class Gf448Elem final {
       std::array<uint8_t, BYTES_448> to_bytes() const;
 
       /**
-       * @brief Swap this and other if b == true. Constant time for any b.
+       * @brief Swap this and @p other if @p mask is set. Constant time.
        */
-      void ct_cond_swap(bool b, Gf448Elem& other);
+      void ct_cond_swap(CT::Mask<uint64_t> mask, Gf448Elem& other);
 
       /**
-       * @brief Set this to @p other if b is true. Constant time for any b.
+       * @brief Set this to @p other if @p mask is true. Constant time.
        */
-      void ct_cond_assign(bool b, const Gf448Elem& other);
+      void ct_cond_assign(CT::Mask<uint64_t> mask, const Gf448Elem& other);
 
       Gf448Elem operator+(const Gf448Elem& other) const;
 
@@ -3104,6 +3085,11 @@ class Gf448Elem final {
    private:
       std::array<uint64_t, WORDS_448> m_x;
 };
+
+/**
+ * @brief Multiply a field element by the Curve448 constant a24 = 39081.
+ */
+Gf448Elem mul_a24(const Gf448Elem& a);
 
 /**
  * @brief Computes elem^2. Faster than operator*.
@@ -3391,7 +3377,7 @@ inline constexpr WrappedOutT load_any(InR&& in_range) {
       if(std::is_constant_evaluated()) /* TODO: C++23: if consteval {} */ {
          return fallback_load_any<endianness, OutT>(std::forward<InR>(in_range));
       } else {
-         std::span in{in_range};
+         const std::span in{in_range};
          if constexpr(sizeof(OutT) == 1) {
             return static_cast<OutT>(in[0]);
          } else if constexpr(endianness == std::endian::native) {
@@ -3418,7 +3404,7 @@ template <std::endian endianness, unsigned_integralish WrappedOutT, ranges::cont
 inline constexpr WrappedOutT load_any(const InR& in_range) {
    using OutT = detail::wrapped_type<WrappedOutT>;
    ranges::assert_exact_byte_length<sizeof(OutT)>(in_range);
-   std::span<const uint8_t, sizeof(OutT)> ins{in_range};
+   const std::span<const uint8_t, sizeof(OutT)> ins{in_range};
    if constexpr(endianness == std::endian::big) {
       return wrap_strong_type<WrappedOutT>(OutT::load_be(ins));
    } else {
@@ -3631,7 +3617,7 @@ inline constexpr void store_any(WrappedInT wrapped_in, OutR&& out_range) {
    const auto in = detail::unwrap_strong_type_or_enum(wrapped_in);
    using InT = decltype(in);
    ranges::assert_exact_byte_length<sizeof(in)>(out_range);
-   std::span out{out_range};
+   const std::span out{out_range};
 
    // At compile time we cannot use `typecast_copy` as it uses `std::memcpy`
    // internally to copy ranges on a byte-by-byte basis, which is not allowed
@@ -3665,7 +3651,7 @@ inline constexpr void store_any(WrappedInT wrapped_in, const OutR& out_range) {
    const auto in = detail::unwrap_strong_type_or_enum(wrapped_in);
    using InT = decltype(in);
    ranges::assert_exact_byte_length<sizeof(in)>(out_range);
-   std::span<uint8_t, sizeof(InT)> outs{out_range};
+   const std::span<uint8_t, sizeof(InT)> outs{out_range};
    if constexpr(endianness == std::endian::big) {
       in.store_be(outs);
    } else {
@@ -3942,6 +3928,10 @@ class BOTAN_TEST_API Scalar448 final {
 
       /// @brief Access the i-th bit of the scalar. From 0 (lsb) to 445 (msb).
       bool get_bit(size_t i) const;
+
+      /// @brief Extract a window of @p width bits starting at bit position @p starting_pos.
+      /// Bits beyond position 445 are treated as zero.
+      uint32_t get_window(size_t starting_pos, size_t width) const;
 
       /// @brief scalar = (scalar + other) mod L
       Scalar448 operator+(const Scalar448& other) const;
@@ -4261,7 +4251,7 @@ constexpr inline uint64_t carry_shift(const donna128& a, size_t shift) {
 }
 
 constexpr inline uint64_t combine_lower(const donna128& a, size_t s1, const donna128& b, size_t s2) {
-   donna128 z = (a >> s1) | (b << s2);
+   const donna128 z = (a >> s1) | (b << s2);
    return z.lo();
 }
 
@@ -4494,6 +4484,43 @@ class GCM_Decryption final : public GCM_Mode {
 
 namespace Botan {
 
+// Helper for defining GFNI constants
+consteval uint64_t gfni_matrix(std::string_view s) {
+   uint64_t matrix = 0;
+   size_t bit_cnt = 0;
+   uint8_t row = 0;
+
+   for(const char c : s) {
+      if(c == ' ' || c == '\n') {
+         continue;
+      }
+      if(c != '0' && c != '1') {
+         throw std::runtime_error("gfni_matrix: invalid bit value");
+      }
+
+      if(c == '1') {
+         row |= 0x80 >> (7 - bit_cnt % 8);
+      }
+      bit_cnt++;
+
+      if(bit_cnt % 8 == 0) {
+         matrix <<= 8;
+         matrix |= row;
+         row = 0;
+      }
+   }
+
+   if(bit_cnt != 64) {
+      throw std::runtime_error("gfni_matrix: invalid bit count");
+   }
+
+   return matrix;
+}
+
+}  // namespace Botan
+
+namespace Botan {
+
 /**
 * GCM's GHASH
 */
@@ -4515,6 +4542,9 @@ class GHASH final : public SymmetricAlgorithm {
       /// Incremental update of associated data used in the GMAC use-case
       void update_associated_data(std::span<const uint8_t> ad);
 
+      /// Reset the AAD state without resetting the key (used in GMAC::final_result)
+      void reset_associated_data();
+
       void final(std::span<uint8_t> out);
 
       Key_Length_Specification key_spec() const override { return Key_Length_Specification(16); }
@@ -4535,9 +4565,21 @@ class GHASH final : public SymmetricAlgorithm {
       void ghash_final_block(std::span<uint8_t, GCM_BS> x, uint64_t ad_len, uint64_t pt_len);
 
 #if defined(BOTAN_HAS_GHASH_CLMUL_CPU)
-      static void ghash_precompute_cpu(const uint8_t H[16], uint64_t H_pow[4 * 2]);
+      static void ghash_precompute_cpu(const uint8_t H[16], secure_vector<uint64_t>& H_pow);
 
-      static void ghash_multiply_cpu(uint8_t x[16], const uint64_t H_pow[4 * 2], const uint8_t input[], size_t blocks);
+      static void ghash_multiply_cpu(uint8_t x[16],
+                                     secure_vector<uint64_t>& H_pow,
+                                     const uint8_t input[],
+                                     size_t blocks);
+#endif
+
+#if defined(BOTAN_HAS_GHASH_AVX512_CLMUL)
+      static void ghash_precompute_avx512_clmul(const uint8_t H[16], uint64_t H_pow[16 * 2]);
+
+      static void ghash_multiply_avx512_clmul(uint8_t x[16],
+                                              const uint64_t H_pow[16 * 2],
+                                              const uint8_t input[],
+                                              size_t blocks);
 #endif
 
 #if defined(BOTAN_HAS_GHASH_CLMUL_VPERM)
@@ -4551,9 +4593,10 @@ class GHASH final : public SymmetricAlgorithm {
    private:
       AlignmentBuffer<uint8_t, GCM_BS> m_buffer;
 
-      std::array<uint8_t, GCM_BS>
-         m_H_ad{};  /// cache of hash state after consuming the AD, reused for multiple messages
-      std::array<uint8_t, GCM_BS> m_ghash{};  /// hash state used for update() or update_associated_data()
+      /// cache of hash state after consuming the AD, reused for multiple messages
+      std::array<uint8_t, GCM_BS> m_H_ad{};
+      /// hash state used for update() or update_associated_data()
+      std::array<uint8_t, GCM_BS> m_ghash{};
       secure_vector<uint64_t> m_HM;
       secure_vector<uint64_t> m_H_pow;
 
@@ -4834,15 +4877,25 @@ constexpr size_t index_of_first_set_byte(T v) {
    #define BOTAN_FN_ISA_AESNI BOTAN_FUNC_ISA("aes,ssse3")
    #define BOTAN_FN_ISA_SHANI BOTAN_FUNC_ISA("sha,ssse3,sse4.1")
    #define BOTAN_FN_ISA_SHA512 BOTAN_FUNC_ISA("sha512,avx2")
+   #define BOTAN_FN_ISA_BMI2 BOTAN_FUNC_ISA("bmi,bmi2")
+   #define BOTAN_FN_ISA_RNG BOTAN_FUNC_ISA("rdrnd")
    #define BOTAN_FN_ISA_SSE2 BOTAN_FUNC_ISA("sse2")
    #define BOTAN_FN_ISA_AVX2 BOTAN_FUNC_ISA("avx2")
    #define BOTAN_FN_ISA_AVX2_BMI2 BOTAN_FUNC_ISA("avx2,bmi,bmi2")
+   #define BOTAN_FN_ISA_AVX2_GFNI BOTAN_FUNC_ISA("avx2,gfni")
    #define BOTAN_FN_ISA_AVX2_VAES BOTAN_FUNC_ISA("vaes,avx2")
+   #define BOTAN_FN_ISA_AVX2_SM3 BOTAN_FUNC_ISA("sm3,avx2")
    #define BOTAN_FN_ISA_AVX2_SM4 BOTAN_FUNC_ISA("sm4,avx2")
-   #define BOTAN_FN_ISA_AVX2_GFNI BOTAN_FUNC_ISA("gfni,avx2")
-   #define BOTAN_FN_ISA_AVX512 BOTAN_FUNC_ISA("avx512f,avx512dq,avx512bw")
-   #define BOTAN_FN_ISA_AVX512_BMI2 BOTAN_FUNC_ISA("avx512f,avx512dq,avx512bw,bmi,bmi2")
+   #define BOTAN_FN_ISA_AVX512 \
+      BOTAN_FUNC_ISA("avx512f,avx512dq,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512bitalg,avx512ifma")
+   #define BOTAN_FN_ISA_AVX512_CLMUL \
+      BOTAN_FUNC_ISA("avx512f,avx512dq,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512bitalg,pclmul,vpclmulqdq")
+   #define BOTAN_FN_ISA_AVX512_BMI2 \
+      BOTAN_FUNC_ISA("avx512f,avx512dq,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512bitalg,avx512ifma,bmi,bmi2")
+   #define BOTAN_FN_ISA_AVX512_GFNI \
+      BOTAN_FUNC_ISA("avx512f,avx512dq,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512bitalg,avx512ifma,gfni")
 
+   #define BOTAN_FN_ISA_HWAES BOTAN_FN_ISA_AESNI
 #endif
 
 #if defined(BOTAN_TARGET_ARCH_IS_ARM64)
@@ -4851,9 +4904,11 @@ constexpr size_t index_of_first_set_byte(T v) {
    #define BOTAN_FN_ISA_CLMUL BOTAN_FUNC_ISA("+crypto+aes")
    #define BOTAN_FN_ISA_AES BOTAN_FUNC_ISA("+crypto+aes")
    #define BOTAN_FN_ISA_SHA2 BOTAN_FUNC_ISA("+crypto+sha2")
+   #define BOTAN_FN_ISA_SM3 BOTAN_FUNC_ISA("arch=armv8.2-a+sm4")
    #define BOTAN_FN_ISA_SM4 BOTAN_FUNC_ISA("arch=armv8.2-a+sm4")
    #define BOTAN_FN_ISA_SHA512 BOTAN_FUNC_ISA("arch=armv8.2-a+sha3")
 
+   #define BOTAN_FN_ISA_HWAES BOTAN_FN_ISA_AES
 #endif
 
 #if defined(BOTAN_TARGET_ARCH_IS_ARM32)
@@ -4865,12 +4920,21 @@ constexpr size_t index_of_first_set_byte(T v) {
    #define BOTAN_FN_ISA_SIMD_4X32 BOTAN_FUNC_ISA("altivec")
    #define BOTAN_FN_ISA_CLMUL BOTAN_FUNC_ISA("vsx,crypto")
    #define BOTAN_FN_ISA_AES BOTAN_FUNC_ISA("vsx,crypto")
+   #define BOTAN_FN_ISA_RNG BOTAN_FUNC_ISA("cpu=power9")
 
+   #define BOTAN_FN_ISA_HWAES BOTAN_FN_ISA_AES
 #endif
 
 #if defined(BOTAN_TARGET_ARCH_IS_LOONGARCH64)
 
    #define BOTAN_FN_ISA_SIMD_4X32 BOTAN_FUNC_ISA("lsx")
+
+#endif
+
+#if defined(BOTAN_TARGET_ARCH_IS_WASM)
+
+   #define BOTAN_FN_ISA_SIMD_4X32 BOTAN_FUNC_ISA("simd128")
+   #define BOTAN_FN_ISA_SIMD_2X64 BOTAN_FUNC_ISA("simd128")
 
 #endif
 
@@ -5013,9 +5077,7 @@ class Sponge {
 
    public:
       constexpr explicit Sponge(Config config) : m_S(config.initial_state), m_S_cursor(0), m_bit_rate(config.bit_rate) {
-         if(m_bit_rate % (sizeof(word) * 8) != 0 || m_bit_rate > words * sizeof(word) * 8) {
-            throw Botan::Invalid_Argument("Invalid sponge bit rate");
-         }
+         BOTAN_ARG_CHECK(m_bit_rate % word_bits == 0 && m_bit_rate < words * word_bits, "Invalid sponge bit rate");
       }
 
       constexpr static size_t state_bytes() { return sizeof(state_t); }
@@ -5135,6 +5197,10 @@ class Keccak_Permutation final : public Sponge<25, uint64_t> {
    private:
 #if defined(BOTAN_HAS_KECCAK_PERM_BMI2)
       void permute_bmi2();
+#endif
+
+#if defined(BOTAN_HAS_KECCAK_PERM_AVX512)
+      void permute_avx512();
 #endif
 
    private:
@@ -5282,11 +5348,9 @@ BOTAN_FORCE_INLINE void Keccak_Permutation_round(uint64_t T[25], const uint64_t 
 
 }  // namespace Botan
 
-
 namespace Botan {
 
 class Kyber_Symmetric_Primitives;
-class Kyber_Keypair_Codec;
 
 class KyberConstants final {
    public:
@@ -5438,7 +5502,7 @@ using next_longer_int_t =
 // clang-format on
 
 template <std::integral T>
-   requires(size_t(sizeof(T)) <= 4)
+   requires(sizeof(T) <= 4)
 consteval T montgomery_R(T q) {
    using T_unsigned = std::make_unsigned_t<T>;
    using T2 = next_longer_uint_t<T_unsigned>;
@@ -5446,7 +5510,7 @@ consteval T montgomery_R(T q) {
 }
 
 template <std::integral T>
-   requires(size_t(sizeof(T)) <= 4)
+   requires(sizeof(T) <= 4)
 consteval T montgomery_R2(T q) {
    using T2 = next_longer_int_t<T>;
    return (static_cast<T2>(montgomery_R(q)) * static_cast<T2>(montgomery_R(q))) % q;
@@ -6450,15 +6514,15 @@ class Kyber_Symmetric_Primitives /* NOLINT(*-special-member-functions) */ {
       virtual ~Kyber_Symmetric_Primitives() = default;
 
       // TODO: remove this once Kyber-R3 is removed
-      KyberMessage H(StrongSpan<const KyberMessage> m) const { return get_H().process<KyberMessage>(m); }
+      KyberMessage H(StrongSpan<const KyberMessage> m) const { return create_H()->process<KyberMessage>(m); }
 
       // TODO: remove this once Kyber-R3 is removed
       KyberHashedCiphertext H(StrongSpan<const KyberCompressedCiphertext> r) const {
-         return get_H().process<KyberHashedCiphertext>(r);
+         return create_H()->process<KyberHashedCiphertext>(r);
       }
 
       KyberHashedPublicKey H(StrongSpan<const KyberSerializedPublicKey> pk) const {
-         return get_H().process<KyberHashedPublicKey>(pk);
+         return create_H()->process<KyberHashedPublicKey>(pk);
       }
 
       std::pair<KyberSeedRho, KyberSeedSigma> G(StrongSpan<const KyberSeedRandomness> seed,
@@ -6477,31 +6541,47 @@ class Kyber_Symmetric_Primitives /* NOLINT(*-special-member-functions) */ {
 
       KyberSharedSecret J(StrongSpan<const KyberImplicitRejectionValue> rejection_value,
                           StrongSpan<const KyberCompressedCiphertext> ciphertext) const {
-         auto& j = get_J();
-         j.update(rejection_value);
-         j.update(ciphertext);
-         return j.final<KyberSharedSecret>();
+         auto j = create_J();
+         j->update(rejection_value);
+         j->update(ciphertext);
+         return j->final<KyberSharedSecret>();
       }
 
       // TODO: remove this once Kyber-R3 is removed
       void KDF(StrongSpan<KyberSharedSecret> out,
                StrongSpan<const KyberSharedSecret> shared_secret,
                StrongSpan<const KyberHashedCiphertext> hashed_ciphertext) const {
-         auto& kdf = get_KDF();
-         kdf.update(shared_secret);
-         kdf.update(hashed_ciphertext);
-         kdf.final(out);
+         auto kdf = create_KDF();
+         kdf->update(shared_secret);
+         kdf->update(hashed_ciphertext);
+         kdf->final(out);
       }
 
       KyberSamplingRandomness PRF(KyberSigmaOrEncryptionRandomness seed,
                                   const uint8_t nonce,
                                   const size_t outlen) const {
          auto bare_seed_span = std::visit([&](const auto s) { return s.get(); }, seed);
-         return get_PRF(bare_seed_span, nonce).output<KyberSamplingRandomness>(outlen);
+         return create_PRF(bare_seed_span, nonce)->output<KyberSamplingRandomness>(outlen);
       }
 
-      Botan::XOF& XOF(StrongSpan<const KyberSeedRho> seed, std::tuple<uint8_t, uint8_t> matrix_position) const {
-         return get_XOF(seed, matrix_position);
+      /// Setup an XOF object for matrix sampling
+      void setup_XOF(std::unique_ptr<Botan::XOF>& xof,
+                     StrongSpan<const KyberSeedRho> seed,
+                     std::tuple<uint8_t, uint8_t> matrix_position) const {
+         if(!xof) {
+            xof = create_XOF(seed, matrix_position);
+         } else {
+            init_XOF(*xof, seed, matrix_position);
+         }
+      }
+
+      /// Setup a seeded PRF XOF for polynomial sampling
+      void setup_PRF(std::unique_ptr<Botan::XOF>& xof, std::span<const uint8_t> seed, uint8_t nonce) const {
+         if(!xof) {
+            xof = create_PRF(seed, nonce);
+         } else {
+            init_PRF(*xof, seed, nonce);
+         }
       }
 
    private:
@@ -6509,9 +6589,9 @@ class Kyber_Symmetric_Primitives /* NOLINT(*-special-member-functions) */ {
                 concepts::contiguous_strong_type T2,
                 ranges::contiguous_range... InputTs>
       std::pair<T1, T2> G_split(const InputTs&... inputs) const {
-         auto& g = get_G();
-         (g.update(inputs), ...);
-         auto s = g.final();
+         auto g = create_G();
+         (g->update(inputs), ...);
+         const auto s = g->final();
 
          BufferSlicer bs(s);
          std::pair<T1, T2> result;
@@ -6525,13 +6605,19 @@ class Kyber_Symmetric_Primitives /* NOLINT(*-special-member-functions) */ {
       virtual std::optional<std::array<uint8_t, 1>> seed_expansion_domain_separator(
          const KyberConstants& mode) const = 0;
 
-      virtual HashFunction& get_G() const = 0;
-      virtual HashFunction& get_H() const = 0;
-      virtual HashFunction& get_J() const = 0;
-      virtual HashFunction& get_KDF() const = 0;
-      virtual Botan::XOF& get_PRF(std::span<const uint8_t> seed, uint8_t nonce) const = 0;
-      virtual Botan::XOF& get_XOF(std::span<const uint8_t> seed,
-                                  std::tuple<uint8_t, uint8_t> matrix_position) const = 0;
+      virtual std::unique_ptr<HashFunction> create_G() const = 0;
+      virtual std::unique_ptr<HashFunction> create_H() const = 0;
+      virtual std::unique_ptr<HashFunction> create_J() const = 0;
+      virtual std::unique_ptr<HashFunction> create_KDF() const = 0;
+
+      virtual std::unique_ptr<Botan::XOF> create_PRF(std::span<const uint8_t> seed, uint8_t nonce) const = 0;
+      virtual void init_PRF(Botan::XOF& xof, std::span<const uint8_t> seed, uint8_t nonce) const = 0;
+
+      virtual std::unique_ptr<Botan::XOF> create_XOF(std::span<const uint8_t> seed,
+                                                     std::tuple<uint8_t, uint8_t> matrix_position) const = 0;
+      virtual void init_XOF(Botan::XOF& xof,
+                            std::span<const uint8_t> seed,
+                            std::tuple<uint8_t, uint8_t> matrix_position) const = 0;
 };
 
 }  // namespace Botan
@@ -6609,7 +6695,12 @@ class PolynomialSampler {
       }
 
    private:
-      KyberSamplingRandomness prf(size_t bytes) { return m_mode.symmetric_primitives().PRF(m_seed, m_nonce++, bytes); }
+      KyberSamplingRandomness prf(size_t bytes) {
+         const auto& sym = m_mode.symmetric_primitives();
+         auto seed_span = m_seed.get();
+         sym.setup_PRF(m_prf_xof, seed_span, m_nonce++);
+         return m_prf_xof->output<KyberSamplingRandomness>(bytes);
+      }
 
       void sample_poly_cbd(KyberPoly& poly, KyberConstants::KyberEta eta) {
          const auto randomness = [&] {
@@ -6630,6 +6721,7 @@ class PolynomialSampler {
       StrongSpan<const SeedT> m_seed;
       const KyberConstants& m_mode;
       uint8_t m_nonce;
+      std::unique_ptr<Botan::XOF> m_prf_xof;
 };
 
 template <typename T>
@@ -6668,13 +6760,15 @@ class Kyber_PublicKeyInternal final {
       void indcpa_encrypt(StrongSpan<KyberCompressedCiphertext> out_ct,
                           StrongSpan<const KyberMessage> m,
                           StrongSpan<const KyberEncryptionRandomness> r,
-                          const KyberPolyMat& At) const;
+                          const KyberPolyMat& At,
+                          const KyberConstants& mode) const;
 
       KyberCompressedCiphertext indcpa_encrypt(const KyberMessage& m,
                                                const KyberEncryptionRandomness& r,
-                                               const KyberPolyMat& At) const {
+                                               const KyberPolyMat& At,
+                                               const KyberConstants& mode) const {
          KyberCompressedCiphertext ct(m_mode.ciphertext_bytes());
-         indcpa_encrypt(ct, m, r, At);
+         indcpa_encrypt(ct, m, r, At, mode);
          return ct;
       }
 
@@ -6897,11 +6991,15 @@ namespace Botan {
 class Kyber_KEM_Operation_Base {
    protected:
       explicit Kyber_KEM_Operation_Base(const Kyber_PublicKeyInternal& pk) :
-            m_At(Kyber_Algos::sample_matrix(pk.rho(), true /* transposed */, pk.mode())) {}
+            m_mode(pk.mode()), m_At(Kyber_Algos::sample_matrix(pk.rho(), true /* transposed */, m_mode)) {}
+
+      const KyberConstants& mode() const { return m_mode; }
 
       const KyberPolyMat& precomputed_matrix_At() const { return m_At; }
 
    private:
+      const KyberConstants& m_mode;
+
       // The public key's matrix is pre-computed to avoid redundant work when
       // encapsulating multiple keys. This matrix is needed for encapsulation as
       // well as for the Fujisaki-Okamoto transform in the decapsulation.
@@ -6930,8 +7028,6 @@ class Kyber_KEM_Encryptor_Base : public PK_Ops::KEM_Encryption_with_KDF,
       virtual void encapsulate(StrongSpan<KyberCompressedCiphertext> out_encapsulated_key,
                                StrongSpan<KyberSharedSecret> out_shared_key,
                                RandomNumberGenerator& rng) = 0;
-
-      virtual const KyberConstants& mode() const = 0;
 };
 
 class Kyber_KEM_Decryptor_Base : public PK_Ops::KEM_Decryption_with_KDF,
@@ -6952,8 +7048,6 @@ class Kyber_KEM_Decryptor_Base : public PK_Ops::KEM_Decryption_with_KDF,
 
       virtual void decapsulate(StrongSpan<KyberSharedSecret> out_shared_key,
                                StrongSpan<const KyberCompressedCiphertext> encapsulated_key) = 0;
-
-      virtual const KyberConstants& mode() const = 0;
 };
 
 }  // namespace Botan
@@ -7128,40 +7222,6 @@ class MerkleDamgard_Hash final {
 
 }  // namespace Botan
 
-namespace Botan {
-
-/**
-* Return true if any of the provided arguments are null
-*/
-template <typename... Ptrs>
-bool any_null_pointers(Ptrs... ptr) {
-   static_assert((... && std::is_pointer_v<Ptrs>), "All arguments must be pointers");
-   return (... || (ptr == nullptr));
-}
-
-inline std::span<const uint8_t> as_span_of_bytes(const char* s, size_t len) {
-   const uint8_t* b = reinterpret_cast<const uint8_t*>(s);
-   return std::span{b, len};
-}
-
-inline std::span<const uint8_t> as_span_of_bytes(const std::string& s) {
-   return as_span_of_bytes(s.data(), s.size());
-}
-
-inline std::span<const uint8_t> as_span_of_bytes(std::string_view s) {
-   return as_span_of_bytes(s.data(), s.size());
-}
-
-inline std::span<const uint8_t> cstr_as_span_of_bytes(const char* s) {
-   return as_span_of_bytes(s, std::strlen(s));
-}
-
-inline std::string bytes_to_string(std::span<const uint8_t> bytes) {
-   return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-}
-
-}  // namespace Botan
-
 
 namespace Botan {
 
@@ -7174,8 +7234,6 @@ class ML_KEM_Encryptor final : public Kyber_KEM_Encryptor_Base {
       void encapsulate(StrongSpan<KyberCompressedCiphertext> out_encapsulated_key,
                        StrongSpan<KyberSharedSecret> out_shared_key,
                        RandomNumberGenerator& rng) override;
-
-      const KyberConstants& mode() const override { return m_public_key->mode(); }
 
    private:
       std::shared_ptr<const Kyber_PublicKeyInternal> m_public_key;
@@ -7194,22 +7252,12 @@ class ML_KEM_Decryptor final : public Kyber_KEM_Decryptor_Base {
       void decapsulate(StrongSpan<KyberSharedSecret> out_shared_key,
                        StrongSpan<const KyberCompressedCiphertext> encapsulated_key) override;
 
-      const KyberConstants& mode() const override { return m_private_key->mode(); }
-
    private:
       std::shared_ptr<const Kyber_PublicKeyInternal> m_public_key;
       std::shared_ptr<const Kyber_PrivateKeyInternal> m_private_key;
 };
 
 class ML_KEM_Symmetric_Primitives final : public Kyber_Symmetric_Primitives {
-   public:
-      ML_KEM_Symmetric_Primitives() :
-            m_sha3_512(HashFunction::create_or_throw("SHA-3(512)")),
-            m_sha3_256(HashFunction::create_or_throw("SHA-3(256)")),
-            m_shake256_256(HashFunction::create_or_throw("SHAKE-256(256)")),
-            m_shake128(Botan::XOF::create_or_throw("SHAKE-128")),
-            m_shake256(Botan::XOF::create_or_throw("SHAKE-256")) {}
-
    protected:
       std::optional<std::array<uint8_t, 1>> seed_expansion_domain_separator(const KyberConstants& mode) const override {
          // NIST FIPS 203, Algorithm 13 (K-PKE.KeyGen)
@@ -7219,34 +7267,44 @@ class ML_KEM_Symmetric_Primitives final : public Kyber_Symmetric_Primitives {
          return std::array{mode.k()};
       }
 
-      HashFunction& get_G() const override { return *m_sha3_512; }
+      std::unique_ptr<HashFunction> create_G() const override { return HashFunction::create_or_throw("SHA-3(512)"); }
 
-      HashFunction& get_H() const override { return *m_sha3_256; }
+      std::unique_ptr<HashFunction> create_H() const override { return HashFunction::create_or_throw("SHA-3(256)"); }
 
-      HashFunction& get_J() const override { return *m_shake256_256; }
-
-      HashFunction& get_KDF() const override { throw Invalid_State("ML-KEM does not support KDF()"); }
-
-      Botan::XOF& get_PRF(std::span<const uint8_t> seed, const uint8_t nonce) const override {
-         m_shake256->clear();
-         m_shake256->update(seed);
-         m_shake256->update(store_be(nonce));
-         return *m_shake256;
+      std::unique_ptr<HashFunction> create_J() const override {
+         return HashFunction::create_or_throw("SHAKE-256(256)");
       }
 
-      Botan::XOF& get_XOF(std::span<const uint8_t> seed, std::tuple<uint8_t, uint8_t> matrix_position) const override {
-         m_shake128->clear();
-         m_shake128->update(seed);
-         m_shake128->update(store_be(make_uint16(std::get<0>(matrix_position), std::get<1>(matrix_position))));
-         return *m_shake128;
+      std::unique_ptr<HashFunction> create_KDF() const override {
+         throw Invalid_State("ML-KEM does not support KDF()");
       }
 
-   private:
-      std::unique_ptr<HashFunction> m_sha3_512;
-      std::unique_ptr<HashFunction> m_sha3_256;
-      std::unique_ptr<HashFunction> m_shake256_256;
-      std::unique_ptr<Botan::XOF> m_shake128;
-      std::unique_ptr<Botan::XOF> m_shake256;
+      std::unique_ptr<Botan::XOF> create_PRF(std::span<const uint8_t> seed, const uint8_t nonce) const override {
+         auto xof = Botan::XOF::create_or_throw("SHAKE-256");
+         init_PRF(*xof, seed, nonce);
+         return xof;
+      }
+
+      void init_PRF(Botan::XOF& xof, std::span<const uint8_t> seed, const uint8_t nonce) const override {
+         xof.clear();
+         xof.update(seed);
+         xof.update(store_be(nonce));
+      }
+
+      std::unique_ptr<Botan::XOF> create_XOF(std::span<const uint8_t> seed,
+                                             std::tuple<uint8_t, uint8_t> matrix_position) const override {
+         auto xof = Botan::XOF::create_or_throw("SHAKE-128");
+         init_XOF(*xof, seed, matrix_position);
+         return xof;
+      }
+
+      void init_XOF(Botan::XOF& xof,
+                    std::span<const uint8_t> seed,
+                    std::tuple<uint8_t, uint8_t> matrix_position) const override {
+         xof.clear();
+         xof.update(seed);
+         xof.update(store_be(make_uint16(std::get<0>(matrix_position), std::get<1>(matrix_position))));
+      }
 };
 
 }  // namespace Botan
@@ -7516,7 +7574,6 @@ class BOTAN_TEST_API Montgomery_Int final {
 namespace Botan {
 
 class BigInt;
-class Barrett_Reduction;
 class Montgomery_Exponentiation_State;
 
 /*
@@ -7577,6 +7634,10 @@ namespace Botan {
 
 #if defined(BOTAN_USE_GCC_INLINE_ASM) && defined(BOTAN_TARGET_ARCH_IS_X86_64)
    #define BOTAN_MP_USE_X86_64_ASM
+#endif
+
+#if defined(BOTAN_USE_GCC_INLINE_ASM) && defined(BOTAN_TARGET_ARCH_IS_ARM64)
+   #define BOTAN_MP_USE_AARCH64_ASM
 #endif
 
 /*
@@ -7650,6 +7711,23 @@ inline constexpr auto word_madd2(W a, W b, W* c) -> W {
 
       return a;
    }
+#elif defined(BOTAN_MP_USE_AARCH64_ASM)
+   if(std::same_as<W, uint64_t> && !std::is_constant_evaluated()) {
+      W lo = 0;
+      W hi = 0;
+      asm(R"(
+         mul  %[lo], %[a], %[b]
+         umulh %[hi], %[a], %[b]
+         adds %[lo], %[lo], %[c]
+         adc  %[hi], %[hi], xzr
+         )"
+          : [lo] "=&r"(lo), [hi] "=&r"(hi)
+          : [a] "r"(a), [b] "r"(b), [c] "r"(*c)
+          : "cc");
+
+      *c = hi;
+      return lo;
+   }
 #endif
 
    typedef typename WordInfo<W>::dword dword;
@@ -7679,6 +7757,25 @@ inline constexpr auto word_madd3(W a, W b, W c, W* d) -> W {
           : "cc");
 
       return a;
+   }
+#elif defined(BOTAN_MP_USE_AARCH64_ASM)
+   if(std::same_as<W, uint64_t> && !std::is_constant_evaluated()) {
+      W lo = 0;
+      W hi = 0;
+      asm(R"(
+         mul  %[lo], %[a], %[b]
+         umulh %[hi], %[a], %[b]
+         adds %[lo], %[lo], %[c]
+         adc  %[hi], %[hi], xzr
+         adds %[lo], %[lo], %[d]
+         adc  %[hi], %[hi], xzr
+         )"
+          : [lo] "=&r"(lo), [hi] "=&r"(hi)
+          : [a] "r"(a), [b] "r"(b), [c] "r"(c), [d] "r"(*d)
+          : "cc");
+
+      *d = hi;
+      return lo;
    }
 #endif
 
@@ -8008,7 +8105,8 @@ class word3 final {
       inline constexpr void mul(W x, W y) {
    #if defined(BOTAN_MP_USE_X86_64_ASM)
          if(std::same_as<W, uint64_t> && !std::is_constant_evaluated()) {
-            W z0 = 0, z1 = 0;
+            W z0 = 0;
+            W z1 = 0;
 
             asm("mulq %[y]" : "=a"(z0), "=d"(z1) : "a"(x), [y] "rm"(y) : "cc");
 
@@ -8022,20 +8120,40 @@ class word3 final {
                 : "cc");
             return;
          }
+   #elif defined(BOTAN_MP_USE_AARCH64_ASM)
+         if(std::same_as<W, uint64_t> && !std::is_constant_evaluated()) {
+            W t0 = 0;
+            W t1 = 0;
+            asm(R"(
+                mul  %[t0], %[x], %[y]
+                umulh %[t1], %[x], %[y]
+                adds %[w0], %[w0], %[t0]
+                adcs %[w1], %[w1], %[t1]
+                adc  %[w2], %[w2], xzr
+                )"
+                : [w0] "+r"(m_w0), [w1] "+r"(m_w1), [w2] "+r"(m_w2), [t0] "=&r"(t0), [t1] "=&r"(t1)
+                : [x] "r"(x), [y] "r"(y)
+                : "cc");
+            return;
+         }
    #endif
 
          typedef typename WordInfo<W>::dword dword;
-         const dword s = dword(x) * y + m_w0;
-         W carry = static_cast<W>(s >> WordInfo<W>::bits);
-         m_w0 = static_cast<W>(s);
-         m_w1 += carry;
-         m_w2 += (m_w1 < carry);
+         const auto z = dword(x) * y;
+         const auto z0 = static_cast<W>(z);
+         const auto z1 = static_cast<W>(z >> WordInfo<W>::bits);
+
+         W carry = 0;
+         m_w0 = word_add(m_w0, z0, &carry);
+         m_w1 = word_add(m_w1, z1, &carry);
+         m_w2 += carry;
       }
 
       inline constexpr void mul_x2(W x, W y) {
    #if defined(BOTAN_MP_USE_X86_64_ASM)
          if(std::same_as<W, uint64_t> && !std::is_constant_evaluated()) {
-            W z0 = 0, z1 = 0;
+            W z0 = 0;
+            W z1 = 0;
 
             asm("mulq %[y]" : "=a"(z0), "=d"(z1) : "a"(x), [y] "rm"(y) : "cc");
 
@@ -8053,20 +8171,40 @@ class word3 final {
                 : "cc");
             return;
          }
+   #elif defined(BOTAN_MP_USE_AARCH64_ASM)
+         if(std::same_as<W, uint64_t> && !std::is_constant_evaluated()) {
+            W t0 = 0;
+            W t1 = 0;
+            asm(R"(
+                mul  %[t0], %[x], %[y]
+                umulh %[t1], %[x], %[y]
+                adds %[w0], %[w0], %[t0]
+                adcs %[w1], %[w1], %[t1]
+                adc  %[w2], %[w2], xzr
+                adds %[w0], %[w0], %[t0]
+                adcs %[w1], %[w1], %[t1]
+                adc  %[w2], %[w2], xzr
+                )"
+                : [w0] "+r"(m_w0), [w1] "+r"(m_w1), [w2] "+r"(m_w2), [t0] "=&r"(t0), [t1] "=&r"(t1)
+                : [x] "r"(x), [y] "r"(y)
+                : "cc");
+            return;
+         }
    #endif
 
-         W carry = 0;
-         x = word_madd2(x, y, &carry);
-         y = carry;
+         typedef typename WordInfo<W>::dword dword;
+         const auto z = dword(x) * y;
+         const auto z0 = static_cast<W>(z);
+         const auto z1 = static_cast<W>(z >> WordInfo<W>::bits);
 
-         carry = 0;
-         m_w0 = word_add(m_w0, x, &carry);
-         m_w1 = word_add(m_w1, y, &carry);
+         W carry = 0;
+         m_w0 = word_add(m_w0, z0, &carry);
+         m_w1 = word_add(m_w1, z1, &carry);
          m_w2 += carry;
 
          carry = 0;
-         m_w0 = word_add(m_w0, x, &carry);
-         m_w1 = word_add(m_w1, y, &carry);
+         m_w0 = word_add(m_w0, z0, &carry);
+         m_w1 = word_add(m_w1, z1, &carry);
          m_w2 += carry;
       }
 
@@ -8416,8 +8554,8 @@ inline constexpr void bigint_shl1(W x[], size_t x_size, size_t x_words, size_t s
    const size_t word_shift = shift / WordInfo<W>::bits;
    const size_t bit_shift = shift % WordInfo<W>::bits;
 
-   copy_mem(x + word_shift, x, x_words);
-   clear_mem(x, word_shift);
+   unchecked_copy_memory(x + word_shift, x, x_words);
+   zeroize_buffer(x, word_shift);
 
    const auto carry_mask = CT::Mask<W>::expand(bit_shift);
    const W carry_shift = carry_mask.if_set_return(WordInfo<W>::bits - bit_shift);
@@ -8438,9 +8576,9 @@ inline constexpr void bigint_shr1(W x[], size_t x_size, size_t shift) {
    const size_t top = x_size >= word_shift ? (x_size - word_shift) : 0;
 
    if(top > 0) {
-      copy_mem(x, x + word_shift, top);
+      unchecked_copy_memory(x, x + word_shift, top);
    }
-   clear_mem(x + top, std::min(word_shift, x_size));
+   zeroize_buffer(x + top, std::min(word_shift, x_size));
 
    const auto carry_mask = CT::Mask<W>::expand(bit_shift);
    const W carry_shift = carry_mask.if_set_return(WordInfo<W>::bits - bit_shift);
@@ -8459,7 +8597,7 @@ inline constexpr void bigint_shl2(W y[], const W x[], size_t x_size, size_t shif
    const size_t word_shift = shift / WordInfo<W>::bits;
    const size_t bit_shift = shift % WordInfo<W>::bits;
 
-   copy_mem(y + word_shift, x, x_size);
+   unchecked_copy_memory(y + word_shift, x, x_size);
 
    const auto carry_mask = CT::Mask<W>::expand(bit_shift);
    const W carry_shift = carry_mask.if_set_return(WordInfo<W>::bits - bit_shift);
@@ -8479,7 +8617,7 @@ inline constexpr void bigint_shr2(W y[], const W x[], size_t x_size, size_t shif
    const size_t new_size = x_size < word_shift ? 0 : (x_size - word_shift);
 
    if(new_size > 0) {
-      copy_mem(y, x + word_shift, new_size);
+      unchecked_copy_memory(y, x + word_shift, new_size);
    }
 
    const auto carry_mask = CT::Mask<W>::expand(bit_shift);
@@ -8634,6 +8772,28 @@ inline constexpr auto bigint_ct_is_eq(const W x[], size_t x_size, const W y[], s
    return CT::Mask<W>::is_zero(diff);
 }
 
+template <WordType W, W div>
+consteval std::pair<W, size_t> div_magic()
+   requires(div == 10)
+{
+   if constexpr(div == 10 && std::same_as<W, uint32_t>) {
+      constexpr W magic = 0xCCCCCCCD;
+      constexpr size_t shift = 35;
+      return std::make_pair(magic, shift);
+   } else if constexpr(div == 10 && std::same_as<W, uint64_t>) {
+      constexpr W magic = 0xCCCCCCCCCCCCCCCD;
+      constexpr size_t shift = 67;
+      return std::make_pair(magic, shift);
+   }
+}
+
+template <WordType W>
+inline constexpr W divide_10(W x) {
+   auto [magic, shift] = div_magic<W, 10>();
+   const auto p = typename WordInfo<W>::dword(magic) * x;
+   return static_cast<W>(p >> shift);
+}
+
 /**
 * Setup for variable-time word level division/modulo operations
 *
@@ -8653,6 +8813,15 @@ class divide_precomp final {
       // This assumes n1 < d so that the quotient fits in a word
       inline constexpr W vartime_div_2to1(W n1, W n0) const {
          BOTAN_ASSERT_NOMSG(n1 < m_divisor);
+
+         if(m_divisor == WordInfo<W>::max) {
+            return vartime_div_2to1_max_d(n1, n0);
+         }
+
+         if(m_divisor == WordInfo<W>::top_bit) {
+            // Simply a shift by N-1 bits
+            return (n1 << 1) | (n0 >> (WordInfo<W>::bits - 1));
+         }
 
          if(!std::is_constant_evaluated()) {
 #if defined(BOTAN_MP_USE_X86_64_ASM)
@@ -8714,6 +8883,45 @@ class divide_precomp final {
       }
 
    private:
+      /*
+      * When the divisor is the maximum integer value, then a two word
+      * division becomes simple.
+      */
+      static inline constexpr W vartime_div_2to1_max_d(W n1, W n0) {
+         /*
+         Use k to refer to WordInfo<W>::bits
+
+         We are dividing n = (n1 * 2^k) + n0 by 2^k - 1
+
+         Recall that 2^k = 1 (mod 2^k - 1)
+
+         Rewrite n = n1*2^k + n0 as n1*(2^k - 1) + n1 + n0
+
+         The result of dividing n by (2^k - 1) will be equal to
+         (n1*(2^k-1) + n1 + n0) / (2^k-1) =
+         n1 + ((n1 + n0) / (2^k-1)
+
+         Use c to refer to ((n1 + n0) / (2^k-1))
+
+         If (n1 + n0) < (2^k - 1) then c is 0
+         If (n1 + n0) >= (2^k - 1) then c is 1
+
+         Since n1 < 2^k - 1 [*] and n0 <= 2^k - 1 it is impossible for (n1 + n0) / (2^k -1)
+         to be greater than 1.
+
+         [*] We require n1 be strictly less than the divisor to ensure that the
+         output fits in a single word; this is checked at the start of vartime_div_2to1.
+         */
+
+         const W s = n0 + n1;
+         // did n0 + n1 overflow? or does (n0 + n1) == 2^k - 1? if either, c == 1
+         if(s < n0 || s == WordInfo<W>::max) {
+            n1 += 1;
+         }
+
+         return n1;
+      }
+
       W m_divisor;
 };
 
@@ -8728,21 +8936,16 @@ template <WordType W>
 inline constexpr auto monty_inverse(W a) -> W {
    BOTAN_ARG_CHECK(a % 2 == 1, "Cannot compute Montgomery inverse of an even integer");
 
-   /*
-   * From "A New Algorithm for Inversion mod p^k" by Çetin Kaya Koç
-   * https://eprint.iacr.org/2017/411.pdf sections 5 and 7.
-   */
+   // Newton's Method, following https://lemire.me/blog/2017/09/18/computing-the-inverse-of-odd-integers/
 
-   W b = 1;
-   W r = 0;
+   constexpr size_t iter = WordInfo<W>::bits == 64 ? 4 : 3;
 
-   for(size_t i = 0; i != WordInfo<W>::bits; ++i) {
-      const W bi = b % 2;
-      r >>= 1;
-      r += bi << (WordInfo<W>::bits - 1);
+   // Initial guess provides 5 bits of accuracy
+   W r = (3 * a) ^ 2;
 
-      b -= a * bi;
-      b >>= 1;
+   // Each iteration doubles the accuracy
+   for(size_t i = 0; i != iter; ++i) {
+      r = r * (2 - r * a);
    }
 
    // Now invert in addition space
@@ -8753,28 +8956,30 @@ inline constexpr auto monty_inverse(W a) -> W {
 
 template <size_t S, WordType W, size_t N>
 inline constexpr W shift_left(std::array<W, N>& x) {
+   static_assert(N >= 1, "Invalid input size");
    static_assert(S < WordInfo<W>::bits, "Shift too large");
 
-   W carry = 0;
-   for(size_t i = 0; i != N; ++i) {
-      const W w = x[i];
-      x[i] = (w << S) | carry;
-      carry = w >> (WordInfo<W>::bits - S);
+   const W carry = x[N - 1] >> (WordInfo<W>::bits - S);
+
+   for(size_t i = N - 1; i != 0; --i) {
+      x[i] = (x[i] << S) | (x[i - 1] >> (WordInfo<W>::bits - S));
    }
+   x[0] <<= S;
 
    return carry;
 }
 
 template <size_t S, WordType W, size_t N>
 inline constexpr W shift_right(std::array<W, N>& x) {
+   static_assert(N >= 1, "Invalid input size");
    static_assert(S < WordInfo<W>::bits, "Shift too large");
 
-   W carry = 0;
-   for(size_t i = 0; i != N; ++i) {
-      const W w = x[N - 1 - i];
-      x[N - 1 - i] = (w >> S) | carry;
-      carry = w << (WordInfo<W>::bits - S);
+   const W carry = x[0] << (WordInfo<W>::bits - S);
+
+   for(size_t i = 0; i != N - 1; ++i) {
+      x[i] = (x[i] >> S) | (x[i + 1] << (WordInfo<W>::bits - S));
    }
+   x[N - 1] >>= S;
 
    return carry;
 }
@@ -8971,7 +9176,7 @@ inline void bigint_monty_redc(
 
 inline void bigint_monty_redc_inplace(word z[], const word p[], size_t p_size, word p_dash, word ws[], size_t ws_size) {
    bigint_monty_redc(z, z, p, p_size, p_dash, ws, ws_size);
-   clear_mem(z + p_size, p_size);
+   zeroize_buffer(z + p_size, p_size);
 }
 
 /**
@@ -9423,7 +9628,7 @@ std::map<std::string, std::string> read_cfg(std::istream& is);
 BOTAN_TEST_API
 std::map<std::string, std::string> read_kv(std::string_view kv);
 
-std::string tolower_string(std::string_view s);
+std::string tolower_string(std::string_view str);
 
 /**
 * Check if the given hostname is a match for the specified wildcard
@@ -9450,6 +9655,8 @@ class Poly1305 final : public MessageAuthenticationCode {
    public:
       std::string name() const override { return "Poly1305"; }
 
+      std::string provider() const override;
+
       std::unique_ptr<MessageAuthenticationCode> new_object() const override { return std::make_unique<Poly1305>(); }
 
       void clear() override;
@@ -9467,9 +9674,1099 @@ class Poly1305 final : public MessageAuthenticationCode {
       void final_result(std::span<uint8_t> output) override;
       void key_schedule(std::span<const uint8_t> key) override;
 
+#if defined(BOTAN_HAS_POLY1305_AVX2)
+      static size_t poly1305_avx2_blocks(secure_vector<uint64_t>& X, const uint8_t m[], size_t blocks);
+#endif
+
+#if defined(BOTAN_HAS_POLY1305_AVX512)
+      static size_t poly1305_avx512_blocks(secure_vector<uint64_t>& X, const uint8_t m[], size_t blocks);
+#endif
+
+      // State layout: pad [2] || accum [3] || r [3] || r^2 [3] || ... || r^n [3]
       secure_vector<uint64_t> m_poly;
       AlignmentBuffer<uint8_t, 16> m_buffer;
 };
+
+}  // namespace Botan
+
+#if defined(BOTAN_TARGET_ARCH_SUPPORTS_SSSE3)
+   #include <immintrin.h>
+   #define BOTAN_SIMD_USE_SSSE3
+
+#elif defined(BOTAN_TARGET_ARCH_SUPPORTS_ALTIVEC)
+   #include <altivec.h>
+   #undef vector
+   #undef bool
+   #define BOTAN_SIMD_USE_ALTIVEC
+   #ifdef __VSX__
+      #define BOTAN_SIMD_USE_VSX
+   #endif
+
+#elif defined(BOTAN_TARGET_ARCH_SUPPORTS_NEON)
+   #include <arm_neon.h>
+   #include <bit>
+   #define BOTAN_SIMD_USE_NEON
+
+#elif defined(BOTAN_TARGET_ARCH_SUPPORTS_LSX)
+   #include <lsxintrin.h>
+   #define BOTAN_SIMD_USE_LSX
+
+#elif defined(BOTAN_TARGET_ARCH_SUPPORTS_SIMD128)
+   #include <wasm_simd128.h>
+   #define BOTAN_SIMD_USE_SIMD128
+
+#else
+   #error "No SIMD instruction set enabled"
+#endif
+
+namespace Botan {
+
+// NOLINTBEGIN(portability-simd-intrinsics)
+
+/**
+* 4x32 bit SIMD register
+*
+* This class is not a general purpose SIMD type, and only offers instructions
+* needed for evaluation of specific crypto primitives. For example it does not
+* currently have equality operators of any kind.
+*
+* Implemented for SSE2, VMX (Altivec), ARMv7/Aarch64 NEON, LoongArch LSX and Wasm SIMD128
+*/
+class SIMD_4x32 final {
+   public:
+#if defined(BOTAN_SIMD_USE_SSSE3) || defined(BOTAN_SIMD_USE_LSX)
+      using native_simd_type = __m128i;
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+      using native_simd_type = __vector unsigned int;
+#elif defined(BOTAN_SIMD_USE_NEON)
+      using native_simd_type = uint32x4_t;
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+      using native_simd_type = v128_t;
+#endif
+
+      SIMD_4x32& operator=(const SIMD_4x32& other) = default;
+      SIMD_4x32(const SIMD_4x32& other) = default;
+
+      SIMD_4x32& operator=(SIMD_4x32&& other) = default;
+      SIMD_4x32(SIMD_4x32&& other) = default;
+
+      ~SIMD_4x32() = default;
+
+      /* NOLINTBEGIN(*-prefer-member-initializer) */
+
+      /**
+      * Zero initialize SIMD register with 4 32-bit elements
+      */
+      BOTAN_FN_ISA_SIMD_4X32 SIMD_4x32() noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         m_simd = _mm_setzero_si128();
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_simd = vec_splat_u32(0);
+#elif defined(BOTAN_SIMD_USE_NEON)
+         m_simd = vdupq_n_u32(0);
+#elif defined(BOTAN_SIMD_USE_LSX)
+         m_simd = __lsx_vldi(0);
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         m_simd = wasm_u32x4_const_splat(0);
+#endif
+      }
+
+      /**
+      * Load SIMD register with 4 32-bit elements
+      */
+      BOTAN_FN_ISA_SIMD_4X32 SIMD_4x32(uint32_t B0, uint32_t B1, uint32_t B2, uint32_t B3) noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         m_simd = _mm_set_epi32(B3, B2, B1, B0);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         __vector unsigned int val = {B0, B1, B2, B3};
+         m_simd = val;
+#elif defined(BOTAN_SIMD_USE_NEON)
+         // Better way to do this?
+         const uint32_t B[4] = {B0, B1, B2, B3};
+         m_simd = vld1q_u32(B);
+#elif defined(BOTAN_SIMD_USE_LSX)
+         // Better way to do this?
+         const uint32_t B[4] = {B0, B1, B2, B3};
+         m_simd = __lsx_vld(B, 0);
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         m_simd = wasm_u32x4_make(B0, B1, B2, B3);
+#endif
+      }
+
+      /* NOLINTEND(*-prefer-member-initializer) */
+
+      /**
+      * Load SIMD register with one 32-bit element repeated
+      */
+      static SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 splat(uint32_t B) noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_set1_epi32(B));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         return SIMD_4x32(vdupq_n_u32(B));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vreplgr2vr_w(B));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(wasm_u32x4_splat(B));
+#else
+         return SIMD_4x32(B, B, B, B);
+#endif
+      }
+
+      /**
+      * Load SIMD register with one 8-bit element repeated
+      */
+      static SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 splat_u8(uint8_t B) noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_set1_epi8(B));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         return SIMD_4x32(vreinterpretq_u32_u8(vdupq_n_u8(B)));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vreplgr2vr_b(B));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(wasm_u8x16_splat(B));
+#else
+         const uint32_t B4 = make_uint32(B, B, B, B);
+         return SIMD_4x32(B4, B4, B4, B4);
+#endif
+      }
+
+      /**
+      * Load a SIMD register with little-endian convention
+      */
+      static SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 load_le(const void* in) noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(in)));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         uint32_t R0 = Botan::load_le<uint32_t>(reinterpret_cast<const uint8_t*>(in), 0);
+         uint32_t R1 = Botan::load_le<uint32_t>(reinterpret_cast<const uint8_t*>(in), 1);
+         uint32_t R2 = Botan::load_le<uint32_t>(reinterpret_cast<const uint8_t*>(in), 2);
+         uint32_t R3 = Botan::load_le<uint32_t>(reinterpret_cast<const uint8_t*>(in), 3);
+         __vector unsigned int val = {R0, R1, R2, R3};
+         return SIMD_4x32(val);
+#elif defined(BOTAN_SIMD_USE_NEON)
+         SIMD_4x32 l(vld1q_u32(static_cast<const uint32_t*>(in)));
+         if constexpr(std::endian::native == std::endian::big) {
+            return l.bswap();
+         } else {
+            return l;
+         }
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vld(in, 0));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(wasm_v128_load(in));
+#endif
+      }
+
+      /**
+      * Load a SIMD register with big-endian convention
+      */
+      static SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 load_be(const void* in) noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3) || defined(BOTAN_SIMD_USE_LSX) || defined(BOTAN_SIMD_USE_SIMD128)
+         return load_le(in).bswap();
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         uint32_t R0 = Botan::load_be<uint32_t>(reinterpret_cast<const uint8_t*>(in), 0);
+         uint32_t R1 = Botan::load_be<uint32_t>(reinterpret_cast<const uint8_t*>(in), 1);
+         uint32_t R2 = Botan::load_be<uint32_t>(reinterpret_cast<const uint8_t*>(in), 2);
+         uint32_t R3 = Botan::load_be<uint32_t>(reinterpret_cast<const uint8_t*>(in), 3);
+         __vector unsigned int val = {R0, R1, R2, R3};
+         return SIMD_4x32(val);
+
+#elif defined(BOTAN_SIMD_USE_NEON)
+         SIMD_4x32 l(vld1q_u32(static_cast<const uint32_t*>(in)));
+         if constexpr(std::endian::native == std::endian::little) {
+            return l.bswap();
+         } else {
+            return l;
+         }
+#endif
+      }
+
+      static SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 load_le(std::span<const uint8_t, 16> in) {
+         return SIMD_4x32::load_le(in.data());
+      }
+
+      static SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 load_be(std::span<const uint8_t, 16> in) {
+         return SIMD_4x32::load_be(in.data());
+      }
+
+      void BOTAN_FN_ISA_SIMD_4X32 store_le(uint32_t out[4]) const noexcept {
+         this->store_le(reinterpret_cast<uint8_t*>(out));
+      }
+
+      void BOTAN_FN_ISA_SIMD_4X32 store_be(uint32_t out[4]) const noexcept {
+         this->store_be(reinterpret_cast<uint8_t*>(out));
+      }
+
+      void BOTAN_FN_ISA_SIMD_4X32 store_le(uint64_t out[2]) const noexcept {
+         this->store_le(reinterpret_cast<uint8_t*>(out));
+      }
+
+      /**
+      * Load a SIMD register with little-endian convention
+      */
+      void BOTAN_FN_ISA_SIMD_4X32 store_le(uint8_t out[]) const noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+
+         _mm_storeu_si128(reinterpret_cast<__m128i*>(out), raw());
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+
+         union {
+               __vector unsigned int V;
+               uint32_t R[4];
+         } vec{};
+
+         // NOLINTNEXTLINE(*-union-access)
+         vec.V = raw();
+         // NOLINTNEXTLINE(*-union-access)
+         Botan::store_le(out, vec.R[0], vec.R[1], vec.R[2], vec.R[3]);
+
+#elif defined(BOTAN_SIMD_USE_NEON)
+         if constexpr(std::endian::native == std::endian::little) {
+            vst1q_u8(out, vreinterpretq_u8_u32(m_simd));
+         } else {
+            vst1q_u8(out, vreinterpretq_u8_u32(bswap().m_simd));
+         }
+#elif defined(BOTAN_SIMD_USE_LSX)
+         __lsx_vst(raw(), out, 0);
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         wasm_v128_store(out, m_simd);
+#endif
+      }
+
+      /**
+      * Load a SIMD register with big-endian convention
+      */
+      BOTAN_FN_ISA_SIMD_4X32 void store_be(uint8_t out[]) const noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3) || defined(BOTAN_SIMD_USE_LSX) || defined(BOTAN_SIMD_USE_SIMD128)
+
+         bswap().store_le(out);
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+
+         union {
+               __vector unsigned int V;
+               uint32_t R[4];
+         } vec{};
+
+         // NOLINTNEXTLINE(*-union-access)
+         vec.V = m_simd;
+         // NOLINTNEXTLINE(*-union-access)
+         Botan::store_be(out, vec.R[0], vec.R[1], vec.R[2], vec.R[3]);
+
+#elif defined(BOTAN_SIMD_USE_NEON)
+         if constexpr(std::endian::native == std::endian::little) {
+            vst1q_u8(out, vreinterpretq_u8_u32(bswap().m_simd));
+         } else {
+            vst1q_u8(out, vreinterpretq_u8_u32(m_simd));
+         }
+#endif
+      }
+
+      void BOTAN_FN_ISA_SIMD_4X32 store_be(std::span<uint8_t, 16> out) const { this->store_be(out.data()); }
+
+      void BOTAN_FN_ISA_SIMD_4X32 store_le(std::span<uint8_t, 16> out) const { this->store_le(out.data()); }
+
+      /*
+      * This is used for SHA-2/SHACAL2
+      */
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 sigma0() const noexcept {
+#if BOTAN_COMPILER_HAS_BUILTIN(__builtin_crypto_vshasigmaw) && defined(_ARCH_PWR8)
+         return SIMD_4x32(__builtin_crypto_vshasigmaw(raw(), 1, 0));
+#else
+         const SIMD_4x32 r1 = this->rotr<2>();
+         const SIMD_4x32 r2 = this->rotr<13>();
+         const SIMD_4x32 r3 = this->rotr<22>();
+         return (r1 ^ r2 ^ r3);
+#endif
+      }
+
+      /*
+      * This is used for SHA-2/SHACAL2
+      */
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 sigma1() const noexcept {
+#if BOTAN_COMPILER_HAS_BUILTIN(__builtin_crypto_vshasigmaw) && defined(_ARCH_PWR8)
+         return SIMD_4x32(__builtin_crypto_vshasigmaw(raw(), 1, 0xF));
+#else
+         const SIMD_4x32 r1 = this->rotr<6>();
+         const SIMD_4x32 r2 = this->rotr<11>();
+         const SIMD_4x32 r3 = this->rotr<25>();
+         return (r1 ^ r2 ^ r3);
+#endif
+      }
+
+      /**
+      * Left rotation by a compile time constant
+      */
+      template <size_t ROT>
+      BOTAN_FN_ISA_SIMD_4X32 SIMD_4x32 rotl() const noexcept
+         requires(ROT > 0 && ROT < 32)
+      {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         if constexpr(ROT == 8) {
+            const auto shuf_rotl_8 = _mm_set_epi64x(0x0e0d0c0f0a09080b, 0x0605040702010003);
+            return SIMD_4x32(_mm_shuffle_epi8(raw(), shuf_rotl_8));
+         } else if constexpr(ROT == 16) {
+            const auto shuf_rotl_16 = _mm_set_epi64x(0x0d0c0f0e09080b0a, 0x0504070601000302);
+            return SIMD_4x32(_mm_shuffle_epi8(raw(), shuf_rotl_16));
+         } else if constexpr(ROT == 24) {
+            const auto shuf_rotl_24 = _mm_set_epi64x(0x0c0f0e0d080b0a09, 0x0407060500030201);
+            return SIMD_4x32(_mm_shuffle_epi8(raw(), shuf_rotl_24));
+         } else {
+            return SIMD_4x32(_mm_xor_si128(_mm_slli_epi32(raw(), static_cast<int>(ROT)),
+                                           _mm_srli_epi32(raw(), static_cast<int>(32 - ROT))));
+         }
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+
+         const unsigned int r = static_cast<unsigned int>(ROT);
+         __vector unsigned int rot = {r, r, r, r};
+         return SIMD_4x32(vec_rl(m_simd, rot));
+
+#elif defined(BOTAN_SIMD_USE_NEON)
+
+   #if defined(BOTAN_TARGET_ARCH_IS_ARM64)
+
+         if constexpr(ROT == 8) {
+            const uint8_t maskb[16] = {3, 0, 1, 2, 7, 4, 5, 6, 11, 8, 9, 10, 15, 12, 13, 14};
+            const uint8x16_t mask = vld1q_u8(maskb);
+            return SIMD_4x32(vreinterpretq_u32_u8(vqtbl1q_u8(vreinterpretq_u8_u32(m_simd), mask)));
+         } else if constexpr(ROT == 16) {
+            return SIMD_4x32(vreinterpretq_u32_u16(vrev32q_u16(vreinterpretq_u16_u32(m_simd))));
+         }
+   #endif
+         return SIMD_4x32(
+            vorrq_u32(vshlq_n_u32(m_simd, static_cast<int>(ROT)), vshrq_n_u32(m_simd, static_cast<int>(32 - ROT))));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vrotri_w(raw(), 32 - ROT));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(wasm_v128_or(wasm_i32x4_shl(m_simd, ROT), wasm_u32x4_shr(m_simd, 32 - ROT)));
+#endif
+      }
+
+      /**
+      * Right rotation by a compile time constant
+      */
+      template <size_t ROT>
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 rotr() const noexcept {
+         return this->rotl<32 - ROT>();
+      }
+
+      /**
+      * Add elements of a SIMD vector
+      */
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 operator+(const SIMD_4x32& other) const noexcept {
+         SIMD_4x32 retval(*this);
+         retval += other;
+         return retval;
+      }
+
+      /**
+      * Subtract elements of a SIMD vector
+      */
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 operator-(const SIMD_4x32& other) const noexcept {
+         SIMD_4x32 retval(*this);
+         retval -= other;
+         return retval;
+      }
+
+      /**
+      * XOR elements of a SIMD vector
+      */
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 operator^(const SIMD_4x32& other) const noexcept {
+         SIMD_4x32 retval(*this);
+         retval ^= other;
+         return retval;
+      }
+
+      /**
+      * Binary OR elements of a SIMD vector
+      */
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 operator|(const SIMD_4x32& other) const noexcept {
+         SIMD_4x32 retval(*this);
+         retval |= other;
+         return retval;
+      }
+
+      /**
+      * Binary AND elements of a SIMD vector
+      */
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 operator&(const SIMD_4x32& other) const noexcept {
+         SIMD_4x32 retval(*this);
+         retval &= other;
+         return retval;
+      }
+
+      void BOTAN_FN_ISA_SIMD_4X32 operator+=(const SIMD_4x32& other) noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         m_simd = _mm_add_epi32(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_simd = vec_add(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_NEON)
+         m_simd = vaddq_u32(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_LSX)
+         m_simd = __lsx_vadd_w(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         m_simd = wasm_i32x4_add(m_simd, other.m_simd);
+#endif
+      }
+
+      void BOTAN_FN_ISA_SIMD_4X32 operator-=(const SIMD_4x32& other) noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         m_simd = _mm_sub_epi32(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_simd = vec_sub(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_NEON)
+         m_simd = vsubq_u32(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_LSX)
+         m_simd = __lsx_vsub_w(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         m_simd = wasm_i32x4_sub(m_simd, other.m_simd);
+#endif
+      }
+
+      void BOTAN_FN_ISA_SIMD_4X32 operator^=(const SIMD_4x32& other) noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         m_simd = _mm_xor_si128(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_simd = vec_xor(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_NEON)
+         m_simd = veorq_u32(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_LSX)
+         m_simd = __lsx_vxor_v(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         m_simd = wasm_v128_xor(m_simd, other.m_simd);
+#endif
+      }
+
+      void BOTAN_FN_ISA_SIMD_4X32 operator^=(uint32_t other) noexcept { *this ^= SIMD_4x32::splat(other); }
+
+      void BOTAN_FN_ISA_SIMD_4X32 operator|=(const SIMD_4x32& other) noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         m_simd = _mm_or_si128(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_simd = vec_or(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_NEON)
+         m_simd = vorrq_u32(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_LSX)
+         m_simd = __lsx_vor_v(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         m_simd = wasm_v128_or(m_simd, other.m_simd);
+#endif
+      }
+
+      void BOTAN_FN_ISA_SIMD_4X32 operator&=(const SIMD_4x32& other) noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         m_simd = _mm_and_si128(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         m_simd = vec_and(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_NEON)
+         m_simd = vandq_u32(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_LSX)
+         m_simd = __lsx_vand_v(m_simd, other.m_simd);
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         m_simd = wasm_v128_and(m_simd, other.m_simd);
+#endif
+      }
+
+      template <int SHIFT>
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 shl() const noexcept
+         requires(SHIFT > 0 && SHIFT < 32)
+      {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_slli_epi32(m_simd, SHIFT));
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const unsigned int s = static_cast<unsigned int>(SHIFT);
+         const __vector unsigned int shifts = {s, s, s, s};
+         return SIMD_4x32(vec_sl(m_simd, shifts));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         return SIMD_4x32(vshlq_n_u32(m_simd, SHIFT));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vslli_w(m_simd, SHIFT));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(wasm_i32x4_shl(m_simd, SHIFT));
+#endif
+      }
+
+      template <int SHIFT>
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 shr() const noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_srli_epi32(m_simd, SHIFT));
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const unsigned int s = static_cast<unsigned int>(SHIFT);
+         const __vector unsigned int shifts = {s, s, s, s};
+         return SIMD_4x32(vec_sr(m_simd, shifts));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         return SIMD_4x32(vshrq_n_u32(m_simd, SHIFT));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vsrli_w(m_simd, SHIFT));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(wasm_u32x4_shr(m_simd, SHIFT));
+#endif
+      }
+
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 operator~() const noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_xor_si128(m_simd, _mm_set1_epi32(0xFFFFFFFF)));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         return SIMD_4x32(vec_nor(m_simd, m_simd));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         return SIMD_4x32(vmvnq_u32(m_simd));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vnor_v(m_simd, m_simd));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(wasm_v128_not(m_simd));
+#endif
+      }
+
+      // (~reg) & other
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 andc(const SIMD_4x32& other) const noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_andnot_si128(m_simd, other.m_simd));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         /*
+         AltiVec does arg1 & ~arg2 rather than SSE's ~arg1 & arg2
+         so swap the arguments
+         */
+         return SIMD_4x32(vec_andc(other.m_simd, m_simd));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         // NEON is also a & ~b
+         return SIMD_4x32(vbicq_u32(other.m_simd, m_simd));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         // LSX is ~a & b
+         return SIMD_4x32(__lsx_vandn_v(m_simd, other.m_simd));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         // SIMD128 is a & ~b
+         return SIMD_4x32(wasm_v128_andnot(other.m_simd, m_simd));
+#endif
+      }
+
+      /**
+      * Return copy *this with each word byte swapped
+      */
+      BOTAN_FN_ISA_SIMD_4X32 SIMD_4x32 bswap() const noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         const auto idx = _mm_set_epi8(12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3);
+
+         return SIMD_4x32(_mm_shuffle_epi8(raw(), idx));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+   #ifdef BOTAN_SIMD_USE_VSX
+         return SIMD_4x32(vec_revb(m_simd));
+   #else
+         const __vector unsigned char rev[1] = {
+            {3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12},
+         };
+
+         return SIMD_4x32(vec_perm(m_simd, m_simd, rev[0]));
+   #endif
+
+#elif defined(BOTAN_SIMD_USE_NEON)
+         return SIMD_4x32(vreinterpretq_u32_u8(vrev32q_u8(vreinterpretq_u8_u32(m_simd))));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vshuf4i_b(m_simd, 0b00011011));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(wasm_i8x16_shuffle(m_simd, m_simd, 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12));
+#endif
+      }
+
+      template <size_t I>
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 shift_elems_left() const noexcept
+         requires(I <= 3)
+      {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_slli_si128(raw(), 4 * I));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         return SIMD_4x32(vextq_u32(vdupq_n_u32(0), raw(), 4 - I));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const __vector unsigned int zero = vec_splat_u32(0);
+
+         const __vector unsigned char shuf[3] = {
+            {16, 17, 18, 19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+            {16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7},
+            {16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 0, 1, 2, 3},
+         };
+
+         return SIMD_4x32(vec_perm(raw(), zero, shuf[I - 1]));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vbsll_v(raw(), 4 * I));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         if constexpr(I == 0) {
+            return SIMD_4x32(m_simd);
+         }
+
+         const auto zero = wasm_u32x4_const_splat(0);
+         if constexpr(I == 1) {
+            return SIMD_4x32(wasm_i8x16_shuffle(m_simd, zero, 16, 16, 16, 16, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11));
+         }
+         if constexpr(I == 2) {
+            return SIMD_4x32(wasm_i8x16_shuffle(m_simd, zero, 16, 16, 16, 16, 16, 16, 16, 16, 0, 1, 2, 3, 4, 5, 6, 7));
+         }
+
+         return SIMD_4x32(wasm_i8x16_shuffle(m_simd, zero, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 0, 1, 2, 3));
+#endif
+      }
+
+      template <size_t I>
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 shift_elems_right() const noexcept
+         requires(I <= 3)
+      {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_srli_si128(raw(), 4 * I));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         return SIMD_4x32(vextq_u32(raw(), vdupq_n_u32(0), I));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const __vector unsigned int zero = vec_splat_u32(0);
+
+         const __vector unsigned char shuf[3] = {
+            {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19},
+            {8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23},
+            {12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27},
+         };
+
+         return SIMD_4x32(vec_perm(raw(), zero, shuf[I - 1]));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vbsrl_v(raw(), 4 * I));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         if constexpr(I == 0) {
+            return SIMD_4x32(m_simd);
+         }
+
+         const auto zero = wasm_u32x4_const_splat(0);
+         if constexpr(I == 1) {
+            return SIMD_4x32(
+               wasm_i8x16_shuffle(m_simd, zero, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 16, 16, 16));
+         }
+         if constexpr(I == 2) {
+            return SIMD_4x32(
+               wasm_i8x16_shuffle(m_simd, zero, 8, 9, 10, 11, 12, 13, 14, 15, 16, 16, 16, 16, 16, 16, 16, 16));
+         }
+
+         return SIMD_4x32(
+            wasm_i8x16_shuffle(m_simd, zero, 12, 13, 14, 15, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16));
+#endif
+      }
+
+      /**
+      * 4x4 Transposition on SIMD registers
+      */
+      static void BOTAN_FN_ISA_SIMD_4X32 transpose(SIMD_4x32& B0,
+                                                   SIMD_4x32& B1,
+                                                   SIMD_4x32& B2,
+                                                   SIMD_4x32& B3) noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         const __m128i T0 = _mm_unpacklo_epi32(B0.m_simd, B1.m_simd);
+         const __m128i T1 = _mm_unpacklo_epi32(B2.m_simd, B3.m_simd);
+         const __m128i T2 = _mm_unpackhi_epi32(B0.m_simd, B1.m_simd);
+         const __m128i T3 = _mm_unpackhi_epi32(B2.m_simd, B3.m_simd);
+
+         B0.m_simd = _mm_unpacklo_epi64(T0, T1);
+         B1.m_simd = _mm_unpackhi_epi64(T0, T1);
+         B2.m_simd = _mm_unpacklo_epi64(T2, T3);
+         B3.m_simd = _mm_unpackhi_epi64(T2, T3);
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const __vector unsigned int T0 = vec_mergeh(B0.m_simd, B2.m_simd);
+         const __vector unsigned int T1 = vec_mergeh(B1.m_simd, B3.m_simd);
+         const __vector unsigned int T2 = vec_mergel(B0.m_simd, B2.m_simd);
+         const __vector unsigned int T3 = vec_mergel(B1.m_simd, B3.m_simd);
+
+         B0.m_simd = vec_mergeh(T0, T1);
+         B1.m_simd = vec_mergel(T0, T1);
+         B2.m_simd = vec_mergeh(T2, T3);
+         B3.m_simd = vec_mergel(T2, T3);
+
+#elif defined(BOTAN_SIMD_USE_NEON) && defined(BOTAN_TARGET_ARCH_IS_ARM32)
+         const uint32x4x2_t T0 = vzipq_u32(B0.m_simd, B2.m_simd);
+         const uint32x4x2_t T1 = vzipq_u32(B1.m_simd, B3.m_simd);
+         const uint32x4x2_t O0 = vzipq_u32(T0.val[0], T1.val[0]);
+         const uint32x4x2_t O1 = vzipq_u32(T0.val[1], T1.val[1]);
+
+         B0.m_simd = O0.val[0];
+         B1.m_simd = O0.val[1];
+         B2.m_simd = O1.val[0];
+         B3.m_simd = O1.val[1];
+
+#elif defined(BOTAN_SIMD_USE_NEON) && defined(BOTAN_TARGET_ARCH_IS_ARM64)
+         const uint32x4_t T0 = vzip1q_u32(B0.m_simd, B2.m_simd);
+         const uint32x4_t T2 = vzip2q_u32(B0.m_simd, B2.m_simd);
+         const uint32x4_t T1 = vzip1q_u32(B1.m_simd, B3.m_simd);
+         const uint32x4_t T3 = vzip2q_u32(B1.m_simd, B3.m_simd);
+
+         B0.m_simd = vzip1q_u32(T0, T1);
+         B1.m_simd = vzip2q_u32(T0, T1);
+         B2.m_simd = vzip1q_u32(T2, T3);
+         B3.m_simd = vzip2q_u32(T2, T3);
+#elif defined(BOTAN_SIMD_USE_LSX)
+         const __m128i T0 = __lsx_vilvl_w(B2.raw(), B0.raw());
+         const __m128i T1 = __lsx_vilvh_w(B2.raw(), B0.raw());
+         const __m128i T2 = __lsx_vilvl_w(B3.raw(), B1.raw());
+         const __m128i T3 = __lsx_vilvh_w(B3.raw(), B1.raw());
+         B0.m_simd = __lsx_vilvl_w(T2, T0);
+         B1.m_simd = __lsx_vilvh_w(T2, T0);
+         B2.m_simd = __lsx_vilvl_w(T3, T1);
+         B3.m_simd = __lsx_vilvh_w(T3, T1);
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         const auto T0 = wasm_i32x4_shuffle(B0.m_simd, B2.m_simd, 0, 4, 1, 5);
+         const auto T2 = wasm_i32x4_shuffle(B0.m_simd, B2.m_simd, 2, 6, 3, 7);
+         const auto T1 = wasm_i32x4_shuffle(B1.m_simd, B3.m_simd, 0, 4, 1, 5);
+         const auto T3 = wasm_i32x4_shuffle(B1.m_simd, B3.m_simd, 2, 6, 3, 7);
+
+         B0.m_simd = wasm_i32x4_shuffle(T0, T1, 0, 4, 1, 5);
+         B1.m_simd = wasm_i32x4_shuffle(T0, T1, 2, 6, 3, 7);
+         B2.m_simd = wasm_i32x4_shuffle(T2, T3, 0, 4, 1, 5);
+         B3.m_simd = wasm_i32x4_shuffle(T2, T3, 2, 6, 3, 7);
+#endif
+      }
+
+      static inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 choose(const SIMD_4x32& mask,
+                                                            const SIMD_4x32& a,
+                                                            const SIMD_4x32& b) noexcept {
+#if defined(BOTAN_SIMD_USE_ALTIVEC)
+         return SIMD_4x32(vec_sel(b.raw(), a.raw(), mask.raw()));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         return SIMD_4x32(vbslq_u32(mask.raw(), a.raw(), b.raw()));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vbitsel_v(b.raw(), a.raw(), mask.raw()));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(wasm_v128_bitselect(a.raw(), b.raw(), mask.raw()));
+#else
+         return (mask & a) ^ mask.andc(b);
+#endif
+      }
+
+      /**
+      * Byte-granularity blend: for each byte position, select from @p a where
+      * the corresponding mask byte is 0xFF, or from @p b where it is 0x00.
+      *
+      * Each byte of @p mask must be either 0x00 or 0xFF; other values produce
+      * undefined results.
+      */
+      static inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 byte_blend(const SIMD_4x32& mask,
+                                                                const SIMD_4x32& a,
+                                                                const SIMD_4x32& b) noexcept {
+         return SIMD_4x32::choose(mask, a, b);
+      }
+
+      /**
+      * Byte-granularity blend: for each byte position, select from @p a where
+      * the corresponding mask byte is 0xFF, or from @p b where it is 0x00.
+      *
+      * Each byte of @p mask must be either 0x00 or 0xFF; other values produce
+      * undefined results.
+      */
+      static inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 byte_blend(uint32_t mask,
+                                                                const SIMD_4x32& a,
+                                                                const SIMD_4x32& b) noexcept {
+         return SIMD_4x32::byte_blend(SIMD_4x32::splat(mask), a, b);
+      }
+
+      static inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 majority(const SIMD_4x32& x,
+                                                              const SIMD_4x32& y,
+                                                              const SIMD_4x32& z) noexcept {
+         return SIMD_4x32::choose(x ^ y, z, y);
+      }
+
+      /**
+      * Byte shuffle
+      *
+      * This function assumes that each byte of idx is <= 16; it may produce incorrect
+      * results if this does not hold.
+      */
+      static inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 byte_shuffle(const SIMD_4x32& tbl, const SIMD_4x32& idx) {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_shuffle_epi8(tbl.raw(), idx.raw()));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         const uint8x16_t tbl8 = vreinterpretq_u8_u32(tbl.raw());
+         const uint8x16_t idx8 = vreinterpretq_u8_u32(idx.raw());
+
+   #if defined(BOTAN_TARGET_ARCH_IS_ARM32)
+         const uint8x8x2_t tbl2 = {vget_low_u8(tbl8), vget_high_u8(tbl8)};
+
+         return SIMD_4x32(
+            vreinterpretq_u32_u8(vcombine_u8(vtbl2_u8(tbl2, vget_low_u8(idx8)), vtbl2_u8(tbl2, vget_high_u8(idx8)))));
+   #else
+         return SIMD_4x32(vreinterpretq_u32_u8(vqtbl1q_u8(tbl8, idx8)));
+   #endif
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const auto r = vec_perm(reinterpret_cast<__vector signed char>(tbl.raw()),
+                                 reinterpret_cast<__vector signed char>(tbl.raw()),
+                                 reinterpret_cast<__vector unsigned char>(idx.raw()));
+         return SIMD_4x32(reinterpret_cast<__vector unsigned int>(r));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vshuf_b(tbl.raw(), tbl.raw(), idx.raw()));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(wasm_i8x16_swizzle(tbl.raw(), idx.raw()));
+#endif
+      }
+
+      /**
+      * Byte shuffle with masking
+      *
+      * If the index is >= 128 then the output byte is set to zero.
+      *
+      * Warning: for indices between 16 and 128 this function may have different
+      * behaviors depending on the CPU; possibly the output is zero, tbl[idx % 16],
+      * or even undefined.
+      */
+      inline static SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 masked_byte_shuffle(const SIMD_4x32& tbl, const SIMD_4x32& idx) {
+#if defined(BOTAN_SIMD_USE_ALTIVEC)
+         const auto zero = vec_splat_s8(0x00);
+         const auto mask = vec_cmplt(reinterpret_cast<__vector signed char>(idx.raw()), zero);
+         const auto r = vec_perm(reinterpret_cast<__vector signed char>(tbl.raw()),
+                                 reinterpret_cast<__vector signed char>(tbl.raw()),
+                                 reinterpret_cast<__vector unsigned char>(idx.raw()));
+         return SIMD_4x32(reinterpret_cast<__vector unsigned int>(vec_sel(r, zero, mask)));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         /*
+         * The behavior of vshuf.b unfortunately differs among microarchitectures
+         * when the index is larger than the available elements. In LA664 CPUs,
+         * larger indices result in a zero byte, which is exactly what we want.
+         * Unfortunately on LA464 machines, the output is instead undefined.
+         *
+         * So we must use a slower sequence that handles the larger indices.
+         * If we had a way of knowing at compile time that we are on an LA664
+         * or later, we could use __lsx_vshuf_b without the comparison or select.
+         */
+         const auto zero = __lsx_vldi(0);
+         const auto r = __lsx_vshuf_b(zero, tbl.raw(), idx.raw());
+         const auto mask = __lsx_vslti_bu(idx.raw(), 16);
+         return SIMD_4x32(__lsx_vbitsel_v(zero, r, mask));
+#else
+         // ARM, x86 and Wasm byte shuffles have the behavior we want for out of range idx
+         return SIMD_4x32::byte_shuffle(tbl, idx);
+#endif
+      }
+
+      static inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 alignr4(const SIMD_4x32& a, const SIMD_4x32& b) {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_alignr_epi8(a.raw(), b.raw(), 4));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         return SIMD_4x32(vextq_u32(b.raw(), a.raw(), 1));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const __vector unsigned char mask = {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19};
+         return SIMD_4x32(vec_perm(b.raw(), a.raw(), mask));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         const auto mask = SIMD_4x32(0x07060504, 0x0B0A0908, 0x0F0E0D0C, 0x13121110);
+         return SIMD_4x32(__lsx_vshuf_b(a.raw(), b.raw(), mask.raw()));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(
+            wasm_i8x16_shuffle(b.raw(), a.raw(), 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19));
+#endif
+      }
+
+      static inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 alignr8(const SIMD_4x32& a, const SIMD_4x32& b) {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_alignr_epi8(a.raw(), b.raw(), 8));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         return SIMD_4x32(vextq_u32(b.raw(), a.raw(), 2));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const __vector unsigned char mask = {8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23};
+         return SIMD_4x32(vec_perm(b.raw(), a.raw(), mask));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vshuf4i_d(a.raw(), b.raw(), 0b0011));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(
+            wasm_i8x16_shuffle(b.raw(), a.raw(), 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23));
+#endif
+      }
+
+      /**
+      If the topmost bit of x is set, return a vector of all ones, otherwise a vector of all zeros
+      ie: (v >> 127) ? splat(0xFFFFFFFF) : zero;
+
+      Most of the implementations work by doing an arithmetic shift of 31 to smear the top bits
+      of each word, followed by a broadcast of the top word.
+      */
+      inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 top_bit_mask() const {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_shuffle_epi32(_mm_srai_epi32(raw(), 31), 0b11111111));
+#elif defined(BOTAN_SIMD_USE_NEON)
+   #if defined(BOTAN_TARGET_ARCH_IS_ARM32)
+         int32x4_t v = vshrq_n_s32(vreinterpretq_s32_u32(raw()), 31);
+         int32x2_t hi = vget_high_s32(v);
+         return SIMD_4x32(vreinterpretq_u32_s32(vdupq_lane_s32(hi, 1)));
+   #else
+         return SIMD_4x32(vreinterpretq_u32_s32(vdupq_laneq_s32(vshrq_n_s32(vreinterpretq_s32_u32(raw()), 31), 3)));
+   #endif
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         const __vector unsigned int shift = vec_splats(31U);
+         const __vector signed int shifted = vec_sra(reinterpret_cast<__vector signed int>(raw()), shift);
+         return SIMD_4x32(reinterpret_cast<__vector unsigned int>(vec_splat(shifted, 3)));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vshuf4i_w(__lsx_vsrai_w(raw(), 31), 0xFF));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(wasm_i32x4_splat(wasm_i32x4_extract_lane(wasm_i32x4_shr(raw(), 31), 3)));
+#endif
+      }
+
+      /**
+      * Swap the upper and lower 64-bit halves of the vector
+      */
+      inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 swap_halves() const {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         return SIMD_4x32(_mm_shuffle_epi32(raw(), 0b01001110));
+#else
+         return SIMD_4x32::alignr8(*this, *this);
+#endif
+      }
+
+      native_simd_type BOTAN_FN_ISA_SIMD_4X32 raw() const noexcept { return m_simd; }
+
+      explicit BOTAN_FN_ISA_SIMD_4X32 SIMD_4x32(native_simd_type x) noexcept : m_simd(x) {}
+
+   private:
+      native_simd_type m_simd;
+};
+
+// NOLINTEND(portability-simd-intrinsics)
+
+template <size_t R>
+inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 rotl(SIMD_4x32 input) {
+   return input.rotl<R>();
+}
+
+template <size_t R>
+inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 rotr(SIMD_4x32 input) {
+   return input.rotr<R>();
+}
+
+// For Serpent:
+template <size_t S>
+inline SIMD_4x32 shl(SIMD_4x32 input) {
+   return input.shl<S>();
+}
+
+}  // namespace Botan
+
+namespace Botan {
+
+// NOLINTBEGIN(portability-simd-intrinsics)
+
+BOTAN_FORCE_INLINE BOTAN_FN_ISA_SIMD_4X32 SIMD_4x32 reverse_vector(const SIMD_4x32& in) {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+   const __m128i BSWAP_MASK = _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+   return SIMD_4x32(_mm_shuffle_epi8(in.raw(), BSWAP_MASK));
+#elif defined(BOTAN_SIMD_USE_NEON)
+   const uint8_t maskb[16] = {15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0};
+   const uint8x16_t mask = vld1q_u8(maskb);
+   return SIMD_4x32(vreinterpretq_u32_u8(vqtbl1q_u8(vreinterpretq_u8_u32(in.raw()), mask)));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+   const __vector unsigned char mask = {15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0};
+   return SIMD_4x32(vec_perm(in.raw(), in.raw(), mask));
+#endif
+}
+
+template <int M>
+BOTAN_FORCE_INLINE BOTAN_FN_ISA_CLMUL SIMD_4x32 clmul(const SIMD_4x32& H, const SIMD_4x32& x) {
+   static_assert(M == 0x00 || M == 0x01 || M == 0x10 || M == 0x11, "Valid clmul mode");
+
+#if defined(BOTAN_SIMD_USE_SSSE3)
+   return SIMD_4x32(_mm_clmulepi64_si128(x.raw(), H.raw(), M));
+#elif defined(BOTAN_SIMD_USE_NEON)
+   const uint64_t a = vgetq_lane_u64(vreinterpretq_u64_u32(x.raw()), M & 0x01);
+   const uint64_t b = vgetq_lane_u64(vreinterpretq_u64_u32(H.raw()), (M & 0x10) >> 4);
+
+   #if defined(BOTAN_BUILD_COMPILER_IS_MSVC)
+   __n64 a1 = {a}, b1 = {b};
+   return SIMD_4x32(vmull_p64(a1, b1));
+   #else
+   return SIMD_4x32(reinterpret_cast<uint32x4_t>(vmull_p64(a, b)));
+   #endif
+
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+   const SIMD_4x32 mask_lo = SIMD_4x32(0, 0, 0xFFFFFFFF, 0xFFFFFFFF);
+   constexpr uint8_t flip = (std::endian::native == std::endian::big) ? 0x11 : 0x00;
+
+   SIMD_4x32 i1 = x;
+   SIMD_4x32 i2 = H;
+
+   if constexpr(std::endian::native == std::endian::big) {
+      i1 = reverse_vector(i1).bswap();
+      i2 = reverse_vector(i2).bswap();
+   }
+
+   if constexpr(M == (0x11 ^ flip)) {
+      i1 &= mask_lo;
+      i2 &= mask_lo;
+   } else if constexpr(M == (0x10 ^ flip)) {
+      i1 = i1.shift_elems_left<2>();
+   } else if constexpr(M == (0x01 ^ flip)) {
+      i2 = i2.shift_elems_left<2>();
+   } else if constexpr(M == (0x00 ^ flip)) {
+      i1 = mask_lo.andc(i1);
+      i2 = mask_lo.andc(i2);
+   }
+
+   auto i1v = reinterpret_cast<__vector unsigned long long>(i1.raw());
+   auto i2v = reinterpret_cast<__vector unsigned long long>(i2.raw());
+
+   #if BOTAN_COMPILER_HAS_BUILTIN(__builtin_crypto_vpmsumd)
+   auto rv = __builtin_crypto_vpmsumd(i1v, i2v);
+   #else
+   auto rv = __builtin_altivec_crypto_vpmsumd(i1v, i2v);
+   #endif
+
+   auto z = SIMD_4x32(reinterpret_cast<__vector unsigned int>(rv));
+
+   if constexpr(std::endian::native == std::endian::big) {
+      z = reverse_vector(z).bswap();
+   }
+
+   return z;
+#endif
+}
+
+// NOLINTEND(portability-simd-intrinsics)
+
+BOTAN_FORCE_INLINE SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 mulx_polyval(const SIMD_4x32& h) {
+   const auto V = SIMD_4x32(0x00000001, 0x00000000, 0x00000000, 0xc2000000);
+
+   // Bitmask set iff the top bit of h is set
+   const auto mask = h.top_bit_mask();
+
+   // Extract the top bits of the words and move them into place as the low bit of the next word
+   auto top_bits = h.shr<31>().shift_elems_left<1>();
+
+   // The main shift, adding back in the top bits that are otherwise lost
+   auto shifted_h = h.shl<1>() | top_bits;
+
+   return shifted_h ^ (mask & V);
+}
+
+BOTAN_FORCE_INLINE SIMD_4x32 BOTAN_FN_ISA_CLMUL polyval_reduce(const SIMD_4x32& hi, const SIMD_4x32& lo) {
+   const SIMD_4x32 V(0, 0xC2000000, 0, 0);
+
+   /*
+   Montgomery reduction
+   Input: 256-bit operand [X3 : X2 : X1 : X0]
+   [A1 : A0] = X0 • 0xc200000000000000
+   [B1 : B0] = [X0 ⨁ A1 : X1 ⨁ A0]
+   [C1 : C0] = B0 • 0xc200000000000000
+   [D1 : D0] = [B0 ⨁ C1 : B1 ⨁ C0]
+   Output: [D1 ⨁ X3 : D0 ⨁ X2]
+   */
+
+   const auto A = clmul<0x00>(lo, V);
+   const auto B = A ^ lo.swap_halves();
+   const auto C = clmul<0x00>(B, V);
+   const auto D = C ^ B.swap_halves();
+
+   return D ^ hi;
+}
+
+BOTAN_FORCE_INLINE SIMD_4x32 BOTAN_FN_ISA_CLMUL polyval_multiply(const SIMD_4x32& H, const SIMD_4x32& x) {
+   SIMD_4x32 hi = clmul<0x11>(H, x);
+   const SIMD_4x32 mid = clmul<0x10>(H, x) ^ clmul<0x01>(H, x);
+   SIMD_4x32 lo = clmul<0x00>(H, x);
+
+   hi ^= mid.shift_elems_right<2>();
+   lo ^= mid.shift_elems_left<2>();
+
+   return polyval_reduce(hi, lo);
+}
 
 }  // namespace Botan
 
@@ -9528,7 +10825,7 @@ struct BitPackingTrait final {
       constexpr static size_t bits_per_pack = [] {
          // Ensure that the bit-packing is byte-aligned and scale it
          // to utilize the collector's bit-width as much as possible.
-         size_t smallest_aligned_pack = std::lcm(bits_per_coeff, size_t(8));
+         const size_t smallest_aligned_pack = std::lcm(bits_per_coeff, size_t(8));
          return (smallest_aligned_pack < bits_in_collector)
                    ? (bits_in_collector / smallest_aligned_pack) * smallest_aligned_pack
                    : smallest_aligned_pack;
@@ -10070,14 +11367,10 @@ BOTAN_FORCE_INLINE void SHA2_32_F(uint32_t A,
                                   uint32_t M3,
                                   uint32_t M4,
                                   uint32_t magic) {
-   uint32_t A_rho = rho<2, 13, 22>(A);
-   uint32_t E_rho = rho<6, 11, 25>(E);
-   uint32_t M2_sigma = sigma<17, 19, 10>(M2);
-   uint32_t M4_sigma = sigma<7, 18, 3>(M4);
-   H += magic + E_rho + choose(E, F, G) + M1;
+   H += magic + rho<6, 11, 25>(E) + choose(E, F, G) + M1;
    D += H;
-   H += A_rho + majority(A, B, C);
-   M1 += M2_sigma + M3 + M4_sigma;
+   H += rho<2, 13, 22>(A) + majority(A, B, C);
+   M1 += sigma<17, 19, 10>(M2) + M3 + sigma<7, 18, 3>(M4);
 }
 
 /*
@@ -10085,11 +11378,9 @@ BOTAN_FORCE_INLINE void SHA2_32_F(uint32_t A,
 */
 BOTAN_FORCE_INLINE void SHA2_32_F(
    uint32_t A, uint32_t B, uint32_t C, uint32_t& D, uint32_t E, uint32_t F, uint32_t G, uint32_t& H, uint32_t M) {
-   uint32_t A_rho = rho<2, 13, 22>(A);
-   uint32_t E_rho = rho<6, 11, 25>(E);
-   H += E_rho + choose(E, F, G) + M;
+   H += rho<6, 11, 25>(E) + choose(E, F, G) + M;
    D += H;
-   H += A_rho + majority(A, B, C);
+   H += rho<2, 13, 22>(A) + majority(A, B, C);
 }
 
 }  // namespace Botan
@@ -10255,14 +11546,10 @@ BOTAN_FORCE_INLINE void SHA2_64_F(uint64_t A,
                                   uint64_t M3,
                                   uint64_t M4,
                                   uint64_t magic) {
-   const uint64_t E_rho = rho<14, 18, 41>(E);
-   const uint64_t A_rho = rho<28, 34, 39>(A);
-   const uint64_t M2_sigma = sigma<19, 61, 6>(M2);
-   const uint64_t M4_sigma = sigma<1, 8, 7>(M4);
-   H += magic + E_rho + choose(E, F, G) + M1;
+   H += magic + rho<14, 18, 41>(E) + choose(E, F, G) + M1;
    D += H;
-   H += A_rho + majority(A, B, C);
-   M1 += M2_sigma + M3 + M4_sigma;
+   H += rho<28, 34, 39>(A) + majority(A, B, C);
+   M1 += sigma<19, 61, 6>(M2) + M3 + sigma<1, 8, 7>(M4);
 }
 
 /*
@@ -10270,11 +11557,9 @@ BOTAN_FORCE_INLINE void SHA2_64_F(uint64_t A,
 */
 BOTAN_FORCE_INLINE void SHA2_64_F(
    uint64_t A, uint64_t B, uint64_t C, uint64_t& D, uint64_t E, uint64_t F, uint64_t G, uint64_t& H, uint64_t M) {
-   const uint64_t E_rho = rho<14, 18, 41>(E);
-   const uint64_t A_rho = rho<28, 34, 39>(A);
-   H += E_rho + choose(E, F, G) + M;
+   H += rho<14, 18, 41>(E) + choose(E, F, G) + M;
    D += H;
-   H += A_rho + majority(A, B, C);
+   H += rho<28, 34, 39>(A) + majority(A, B, C);
 }
 
 }  // namespace Botan
@@ -10412,7 +11697,6 @@ class SHAKE_256 final : public HashFunction {
 
 }  // namespace Botan
 
-
 namespace Botan {
 
 /**
@@ -10471,784 +11755,6 @@ class SHAKE_256_XOF final : public SHAKE_XOF {
 
       std::unique_ptr<XOF> new_object() const final { return std::make_unique<SHAKE_256_XOF>(); }
 };
-
-}  // namespace Botan
-
-#if defined(BOTAN_TARGET_ARCH_SUPPORTS_SSSE3)
-   #include <emmintrin.h>
-   #include <tmmintrin.h>
-   #define BOTAN_SIMD_USE_SSSE3
-
-#elif defined(BOTAN_TARGET_ARCH_SUPPORTS_ALTIVEC)
-   #include <altivec.h>
-   #undef vector
-   #undef bool
-   #define BOTAN_SIMD_USE_ALTIVEC
-   #ifdef __VSX__
-      #define BOTAN_SIMD_USE_VSX
-   #endif
-
-#elif defined(BOTAN_TARGET_ARCH_SUPPORTS_NEON)
-   #include <arm_neon.h>
-   #include <bit>
-   #define BOTAN_SIMD_USE_NEON
-
-#elif defined(BOTAN_TARGET_ARCH_SUPPORTS_LSX)
-   #include <lsxintrin.h>
-   #define BOTAN_SIMD_USE_LSX
-
-#else
-   #error "No SIMD instruction set enabled"
-#endif
-
-namespace Botan {
-
-#if defined(BOTAN_SIMD_USE_SSSE3) || defined(BOTAN_SIMD_USE_LSX)
-using native_simd_type = __m128i;
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-using native_simd_type = __vector unsigned int;
-#elif defined(BOTAN_SIMD_USE_NEON)
-using native_simd_type = uint32x4_t;
-#endif
-
-// NOLINTBEGIN(portability-simd-intrinsics)
-
-/**
-* 4x32 bit SIMD register
-*
-* This class is not a general purpose SIMD type, and only offers instructions
-* needed for evaluation of specific crypto primitives. For example it does not
-* currently have equality operators of any kind.
-*
-* Implemented for SSE2, VMX (Altivec), ARMv7/Aarch64 NEON, and LoongArch LSX
-*/
-class SIMD_4x32 final {
-   public:
-      SIMD_4x32& operator=(const SIMD_4x32& other) = default;
-      SIMD_4x32(const SIMD_4x32& other) = default;
-
-      SIMD_4x32& operator=(SIMD_4x32&& other) = default;
-      SIMD_4x32(SIMD_4x32&& other) = default;
-
-      ~SIMD_4x32() = default;
-
-      /* NOLINTBEGIN(*-prefer-member-initializer) */
-
-      /**
-      * Zero initialize SIMD register with 4 32-bit elements
-      */
-      SIMD_4x32() noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         m_simd = _mm_setzero_si128();
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         m_simd = vec_splat_u32(0);
-#elif defined(BOTAN_SIMD_USE_NEON)
-         m_simd = vdupq_n_u32(0);
-#elif defined(BOTAN_SIMD_USE_LSX)
-         m_simd = __lsx_vldi(0);
-#endif
-      }
-
-      /**
-      * Load SIMD register with 4 32-bit elements
-      */
-      SIMD_4x32(uint32_t B0, uint32_t B1, uint32_t B2, uint32_t B3) noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         m_simd = _mm_set_epi32(B3, B2, B1, B0);
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         __vector unsigned int val = {B0, B1, B2, B3};
-         m_simd = val;
-#elif defined(BOTAN_SIMD_USE_NEON)
-         // Better way to do this?
-         const uint32_t B[4] = {B0, B1, B2, B3};
-         m_simd = vld1q_u32(B);
-#elif defined(BOTAN_SIMD_USE_LSX)
-         // Better way to do this?
-         const uint32_t B[4] = {B0, B1, B2, B3};
-         m_simd = __lsx_vld(B, 0);
-#endif
-      }
-
-      /* NOLINTEND(*-prefer-member-initializer) */
-
-      /**
-      * Load SIMD register with one 32-bit element repeated
-      */
-      static SIMD_4x32 splat(uint32_t B) noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         return SIMD_4x32(_mm_set1_epi32(B));
-#elif defined(BOTAN_SIMD_USE_NEON)
-         return SIMD_4x32(vdupq_n_u32(B));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vreplgr2vr_w(B));
-#else
-         return SIMD_4x32(B, B, B, B);
-#endif
-      }
-
-      /**
-      * Load SIMD register with one 8-bit element repeated
-      */
-      static SIMD_4x32 splat_u8(uint8_t B) noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         return SIMD_4x32(_mm_set1_epi8(B));
-#elif defined(BOTAN_SIMD_USE_NEON)
-         return SIMD_4x32(vreinterpretq_u32_u8(vdupq_n_u8(B)));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vreplgr2vr_b(B));
-#else
-         const uint32_t B4 = make_uint32(B, B, B, B);
-         return SIMD_4x32(B4, B4, B4, B4);
-#endif
-      }
-
-      /**
-      * Load a SIMD register with little-endian convention
-      */
-      static SIMD_4x32 load_le(const void* in) noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         return SIMD_4x32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(in)));
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         uint32_t R0 = Botan::load_le<uint32_t>(reinterpret_cast<const uint8_t*>(in), 0);
-         uint32_t R1 = Botan::load_le<uint32_t>(reinterpret_cast<const uint8_t*>(in), 1);
-         uint32_t R2 = Botan::load_le<uint32_t>(reinterpret_cast<const uint8_t*>(in), 2);
-         uint32_t R3 = Botan::load_le<uint32_t>(reinterpret_cast<const uint8_t*>(in), 3);
-         __vector unsigned int val = {R0, R1, R2, R3};
-         return SIMD_4x32(val);
-#elif defined(BOTAN_SIMD_USE_NEON)
-         SIMD_4x32 l(vld1q_u32(static_cast<const uint32_t*>(in)));
-         if constexpr(std::endian::native == std::endian::big) {
-            return l.bswap();
-         } else {
-            return l;
-         }
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vld(in, 0));
-#endif
-      }
-
-      /**
-      * Load a SIMD register with big-endian convention
-      */
-      static SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 load_be(const void* in) noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3) || defined(BOTAN_SIMD_USE_LSX)
-         return load_le(in).bswap();
-
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         uint32_t R0 = Botan::load_be<uint32_t>(reinterpret_cast<const uint8_t*>(in), 0);
-         uint32_t R1 = Botan::load_be<uint32_t>(reinterpret_cast<const uint8_t*>(in), 1);
-         uint32_t R2 = Botan::load_be<uint32_t>(reinterpret_cast<const uint8_t*>(in), 2);
-         uint32_t R3 = Botan::load_be<uint32_t>(reinterpret_cast<const uint8_t*>(in), 3);
-         __vector unsigned int val = {R0, R1, R2, R3};
-         return SIMD_4x32(val);
-
-#elif defined(BOTAN_SIMD_USE_NEON)
-         SIMD_4x32 l(vld1q_u32(static_cast<const uint32_t*>(in)));
-         if constexpr(std::endian::native == std::endian::little) {
-            return l.bswap();
-         } else {
-            return l;
-         }
-#endif
-      }
-
-      static SIMD_4x32 load_le(std::span<const uint8_t, 16> in) { return SIMD_4x32::load_le(in.data()); }
-
-      static SIMD_4x32 load_be(std::span<const uint8_t, 16> in) { return SIMD_4x32::load_be(in.data()); }
-
-      void store_le(uint32_t out[4]) const noexcept { this->store_le(reinterpret_cast<uint8_t*>(out)); }
-
-      void store_be(uint32_t out[4]) const noexcept { this->store_be(reinterpret_cast<uint8_t*>(out)); }
-
-      void store_le(uint64_t out[2]) const noexcept { this->store_le(reinterpret_cast<uint8_t*>(out)); }
-
-      /**
-      * Load a SIMD register with little-endian convention
-      */
-      void store_le(uint8_t out[]) const noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-
-         _mm_storeu_si128(reinterpret_cast<__m128i*>(out), raw());
-
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-
-         union {
-               __vector unsigned int V;
-               uint32_t R[4];
-         } vec{};
-
-         // NOLINTNEXTLINE(*-union-access)
-         vec.V = raw();
-         // NOLINTNEXTLINE(*-union-access)
-         Botan::store_le(out, vec.R[0], vec.R[1], vec.R[2], vec.R[3]);
-
-#elif defined(BOTAN_SIMD_USE_NEON)
-         if constexpr(std::endian::native == std::endian::little) {
-            vst1q_u8(out, vreinterpretq_u8_u32(m_simd));
-         } else {
-            vst1q_u8(out, vreinterpretq_u8_u32(bswap().m_simd));
-         }
-#elif defined(BOTAN_SIMD_USE_LSX)
-         __lsx_vst(raw(), out, 0);
-#endif
-      }
-
-      /**
-      * Load a SIMD register with big-endian convention
-      */
-      BOTAN_FN_ISA_SIMD_4X32 void store_be(uint8_t out[]) const noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3) || defined(BOTAN_SIMD_USE_LSX)
-
-         bswap().store_le(out);
-
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-
-         union {
-               __vector unsigned int V;
-               uint32_t R[4];
-         } vec{};
-
-         // NOLINTNEXTLINE(*-union-access)
-         vec.V = m_simd;
-         // NOLINTNEXTLINE(*-union-access)
-         Botan::store_be(out, vec.R[0], vec.R[1], vec.R[2], vec.R[3]);
-
-#elif defined(BOTAN_SIMD_USE_NEON)
-         if constexpr(std::endian::native == std::endian::little) {
-            vst1q_u8(out, vreinterpretq_u8_u32(bswap().m_simd));
-         } else {
-            vst1q_u8(out, vreinterpretq_u8_u32(m_simd));
-         }
-#endif
-      }
-
-      void store_be(std::span<uint8_t, 16> out) const { this->store_be(out.data()); }
-
-      void store_le(std::span<uint8_t, 16> out) const { this->store_le(out.data()); }
-
-      /*
-      * This is used for SHA-2/SHACAL2
-      */
-      SIMD_4x32 sigma0() const noexcept {
-#if BOTAN_COMPILER_HAS_BUILTIN(__builtin_crypto_vshasigmaw) && defined(_ARCH_PWR8)
-         return SIMD_4x32(__builtin_crypto_vshasigmaw(raw(), 1, 0));
-#else
-         const SIMD_4x32 r1 = this->rotr<2>();
-         const SIMD_4x32 r2 = this->rotr<13>();
-         const SIMD_4x32 r3 = this->rotr<22>();
-         return (r1 ^ r2 ^ r3);
-#endif
-      }
-
-      /*
-      * This is used for SHA-2/SHACAL2
-      */
-      SIMD_4x32 sigma1() const noexcept {
-#if BOTAN_COMPILER_HAS_BUILTIN(__builtin_crypto_vshasigmaw) && defined(_ARCH_PWR8)
-         return SIMD_4x32(__builtin_crypto_vshasigmaw(raw(), 1, 0xF));
-#else
-         const SIMD_4x32 r1 = this->rotr<6>();
-         const SIMD_4x32 r2 = this->rotr<11>();
-         const SIMD_4x32 r3 = this->rotr<25>();
-         return (r1 ^ r2 ^ r3);
-#endif
-      }
-
-      /**
-      * Left rotation by a compile time constant
-      */
-      template <size_t ROT>
-      BOTAN_FN_ISA_SIMD_4X32 SIMD_4x32 rotl() const noexcept
-         requires(ROT > 0 && ROT < 32)
-      {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         if constexpr(ROT == 8) {
-            const auto shuf_rotl_8 = _mm_set_epi64x(0x0e0d0c0f0a09080b, 0x0605040702010003);
-            return SIMD_4x32(_mm_shuffle_epi8(raw(), shuf_rotl_8));
-         } else if constexpr(ROT == 16) {
-            const auto shuf_rotl_16 = _mm_set_epi64x(0x0d0c0f0e09080b0a, 0x0504070601000302);
-            return SIMD_4x32(_mm_shuffle_epi8(raw(), shuf_rotl_16));
-         } else if constexpr(ROT == 24) {
-            const auto shuf_rotl_24 = _mm_set_epi64x(0x0c0f0e0d080b0a09, 0x0407060500030201);
-            return SIMD_4x32(_mm_shuffle_epi8(raw(), shuf_rotl_24));
-         } else {
-            return SIMD_4x32(_mm_or_si128(_mm_slli_epi32(raw(), static_cast<int>(ROT)),
-                                          _mm_srli_epi32(raw(), static_cast<int>(32 - ROT))));
-         }
-
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-
-         const unsigned int r = static_cast<unsigned int>(ROT);
-         __vector unsigned int rot = {r, r, r, r};
-         return SIMD_4x32(vec_rl(m_simd, rot));
-
-#elif defined(BOTAN_SIMD_USE_NEON)
-
-   #if defined(BOTAN_TARGET_ARCH_IS_ARM64)
-
-         if constexpr(ROT == 8) {
-            const uint8_t maskb[16] = {3, 0, 1, 2, 7, 4, 5, 6, 11, 8, 9, 10, 15, 12, 13, 14};
-            const uint8x16_t mask = vld1q_u8(maskb);
-            return SIMD_4x32(vreinterpretq_u32_u8(vqtbl1q_u8(vreinterpretq_u8_u32(m_simd), mask)));
-         } else if constexpr(ROT == 16) {
-            return SIMD_4x32(vreinterpretq_u32_u16(vrev32q_u16(vreinterpretq_u16_u32(m_simd))));
-         }
-   #endif
-         return SIMD_4x32(
-            vorrq_u32(vshlq_n_u32(m_simd, static_cast<int>(ROT)), vshrq_n_u32(m_simd, static_cast<int>(32 - ROT))));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vrotri_w(raw(), 32 - ROT));
-#endif
-      }
-
-      /**
-      * Right rotation by a compile time constant
-      */
-      template <size_t ROT>
-      SIMD_4x32 rotr() const noexcept {
-         return this->rotl<32 - ROT>();
-      }
-
-      /**
-      * Add elements of a SIMD vector
-      */
-      SIMD_4x32 operator+(const SIMD_4x32& other) const noexcept {
-         SIMD_4x32 retval(*this);
-         retval += other;
-         return retval;
-      }
-
-      /**
-      * Subtract elements of a SIMD vector
-      */
-      SIMD_4x32 operator-(const SIMD_4x32& other) const noexcept {
-         SIMD_4x32 retval(*this);
-         retval -= other;
-         return retval;
-      }
-
-      /**
-      * XOR elements of a SIMD vector
-      */
-      SIMD_4x32 operator^(const SIMD_4x32& other) const noexcept {
-         SIMD_4x32 retval(*this);
-         retval ^= other;
-         return retval;
-      }
-
-      /**
-      * Binary OR elements of a SIMD vector
-      */
-      SIMD_4x32 operator|(const SIMD_4x32& other) const noexcept {
-         SIMD_4x32 retval(*this);
-         retval |= other;
-         return retval;
-      }
-
-      /**
-      * Binary AND elements of a SIMD vector
-      */
-      SIMD_4x32 operator&(const SIMD_4x32& other) const noexcept {
-         SIMD_4x32 retval(*this);
-         retval &= other;
-         return retval;
-      }
-
-      void operator+=(const SIMD_4x32& other) noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         m_simd = _mm_add_epi32(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         m_simd = vec_add(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_NEON)
-         m_simd = vaddq_u32(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_LSX)
-         m_simd = __lsx_vadd_w(m_simd, other.m_simd);
-#endif
-      }
-
-      void operator-=(const SIMD_4x32& other) noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         m_simd = _mm_sub_epi32(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         m_simd = vec_sub(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_NEON)
-         m_simd = vsubq_u32(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_LSX)
-         m_simd = __lsx_vsub_w(m_simd, other.m_simd);
-#endif
-      }
-
-      void operator^=(const SIMD_4x32& other) noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         m_simd = _mm_xor_si128(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         m_simd = vec_xor(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_NEON)
-         m_simd = veorq_u32(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_LSX)
-         m_simd = __lsx_vxor_v(m_simd, other.m_simd);
-#endif
-      }
-
-      void operator^=(uint32_t other) noexcept { *this ^= SIMD_4x32::splat(other); }
-
-      void operator|=(const SIMD_4x32& other) noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         m_simd = _mm_or_si128(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         m_simd = vec_or(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_NEON)
-         m_simd = vorrq_u32(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_LSX)
-         m_simd = __lsx_vor_v(m_simd, other.m_simd);
-#endif
-      }
-
-      void operator&=(const SIMD_4x32& other) noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         m_simd = _mm_and_si128(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         m_simd = vec_and(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_NEON)
-         m_simd = vandq_u32(m_simd, other.m_simd);
-#elif defined(BOTAN_SIMD_USE_LSX)
-         m_simd = __lsx_vand_v(m_simd, other.m_simd);
-#endif
-      }
-
-      template <int SHIFT>
-      SIMD_4x32 shl() const noexcept
-         requires(SHIFT > 0 && SHIFT < 32)
-      {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         return SIMD_4x32(_mm_slli_epi32(m_simd, SHIFT));
-
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         const unsigned int s = static_cast<unsigned int>(SHIFT);
-         const __vector unsigned int shifts = {s, s, s, s};
-         return SIMD_4x32(vec_sl(m_simd, shifts));
-#elif defined(BOTAN_SIMD_USE_NEON)
-         return SIMD_4x32(vshlq_n_u32(m_simd, SHIFT));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vslli_w(m_simd, SHIFT));
-#endif
-      }
-
-      template <int SHIFT>
-      SIMD_4x32 shr() const noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         return SIMD_4x32(_mm_srli_epi32(m_simd, SHIFT));
-
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         const unsigned int s = static_cast<unsigned int>(SHIFT);
-         const __vector unsigned int shifts = {s, s, s, s};
-         return SIMD_4x32(vec_sr(m_simd, shifts));
-#elif defined(BOTAN_SIMD_USE_NEON)
-         return SIMD_4x32(vshrq_n_u32(m_simd, SHIFT));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vsrli_w(m_simd, SHIFT));
-#endif
-      }
-
-      SIMD_4x32 operator~() const noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         return SIMD_4x32(_mm_xor_si128(m_simd, _mm_set1_epi32(0xFFFFFFFF)));
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         return SIMD_4x32(vec_nor(m_simd, m_simd));
-#elif defined(BOTAN_SIMD_USE_NEON)
-         return SIMD_4x32(vmvnq_u32(m_simd));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vnor_v(m_simd, m_simd));
-#endif
-      }
-
-      // (~reg) & other
-      SIMD_4x32 andc(const SIMD_4x32& other) const noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         return SIMD_4x32(_mm_andnot_si128(m_simd, other.m_simd));
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         /*
-         AltiVec does arg1 & ~arg2 rather than SSE's ~arg1 & arg2
-         so swap the arguments
-         */
-         return SIMD_4x32(vec_andc(other.m_simd, m_simd));
-#elif defined(BOTAN_SIMD_USE_NEON)
-         // NEON is also a & ~b
-         return SIMD_4x32(vbicq_u32(other.m_simd, m_simd));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         // LSX is ~a & b
-         return SIMD_4x32(__lsx_vandn_v(m_simd, other.m_simd));
-#endif
-      }
-
-      /**
-      * Return copy *this with each word byte swapped
-      */
-      BOTAN_FN_ISA_SIMD_4X32 SIMD_4x32 bswap() const noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         const auto idx = _mm_set_epi8(12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3);
-
-         return SIMD_4x32(_mm_shuffle_epi8(raw(), idx));
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-   #ifdef BOTAN_SIMD_USE_VSX
-         return SIMD_4x32(vec_revb(m_simd));
-   #else
-         const __vector unsigned char rev[1] = {
-            {3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12},
-         };
-
-         return SIMD_4x32(vec_perm(m_simd, m_simd, rev[0]));
-   #endif
-
-#elif defined(BOTAN_SIMD_USE_NEON)
-         return SIMD_4x32(vreinterpretq_u32_u8(vrev32q_u8(vreinterpretq_u8_u32(m_simd))));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vshuf4i_b(m_simd, 0b00011011));
-#endif
-      }
-
-      template <size_t I>
-      SIMD_4x32 shift_elems_left() const noexcept
-         requires(I <= 3)
-      {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         return SIMD_4x32(_mm_slli_si128(raw(), 4 * I));
-#elif defined(BOTAN_SIMD_USE_NEON)
-         return SIMD_4x32(vextq_u32(vdupq_n_u32(0), raw(), 4 - I));
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         const __vector unsigned int zero = vec_splat_u32(0);
-
-         const __vector unsigned char shuf[3] = {
-            {16, 17, 18, 19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
-            {16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7},
-            {16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 0, 1, 2, 3},
-         };
-
-         return SIMD_4x32(vec_perm(raw(), zero, shuf[I - 1]));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vbsll_v(raw(), 4 * I));
-#endif
-      }
-
-      template <size_t I>
-      SIMD_4x32 shift_elems_right() const noexcept
-         requires(I <= 3)
-      {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         return SIMD_4x32(_mm_srli_si128(raw(), 4 * I));
-#elif defined(BOTAN_SIMD_USE_NEON)
-         return SIMD_4x32(vextq_u32(raw(), vdupq_n_u32(0), I));
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         const __vector unsigned int zero = vec_splat_u32(0);
-
-         const __vector unsigned char shuf[3] = {
-            {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19},
-            {8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23},
-            {12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27},
-         };
-
-         return SIMD_4x32(vec_perm(raw(), zero, shuf[I - 1]));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vbsrl_v(raw(), 4 * I));
-#endif
-      }
-
-      /**
-      * 4x4 Transposition on SIMD registers
-      */
-      static void transpose(SIMD_4x32& B0, SIMD_4x32& B1, SIMD_4x32& B2, SIMD_4x32& B3) noexcept {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         const __m128i T0 = _mm_unpacklo_epi32(B0.m_simd, B1.m_simd);
-         const __m128i T1 = _mm_unpacklo_epi32(B2.m_simd, B3.m_simd);
-         const __m128i T2 = _mm_unpackhi_epi32(B0.m_simd, B1.m_simd);
-         const __m128i T3 = _mm_unpackhi_epi32(B2.m_simd, B3.m_simd);
-
-         B0.m_simd = _mm_unpacklo_epi64(T0, T1);
-         B1.m_simd = _mm_unpackhi_epi64(T0, T1);
-         B2.m_simd = _mm_unpacklo_epi64(T2, T3);
-         B3.m_simd = _mm_unpackhi_epi64(T2, T3);
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         const __vector unsigned int T0 = vec_mergeh(B0.m_simd, B2.m_simd);
-         const __vector unsigned int T1 = vec_mergeh(B1.m_simd, B3.m_simd);
-         const __vector unsigned int T2 = vec_mergel(B0.m_simd, B2.m_simd);
-         const __vector unsigned int T3 = vec_mergel(B1.m_simd, B3.m_simd);
-
-         B0.m_simd = vec_mergeh(T0, T1);
-         B1.m_simd = vec_mergel(T0, T1);
-         B2.m_simd = vec_mergeh(T2, T3);
-         B3.m_simd = vec_mergel(T2, T3);
-
-#elif defined(BOTAN_SIMD_USE_NEON) && defined(BOTAN_TARGET_ARCH_IS_ARM32)
-         const uint32x4x2_t T0 = vzipq_u32(B0.m_simd, B2.m_simd);
-         const uint32x4x2_t T1 = vzipq_u32(B1.m_simd, B3.m_simd);
-         const uint32x4x2_t O0 = vzipq_u32(T0.val[0], T1.val[0]);
-         const uint32x4x2_t O1 = vzipq_u32(T0.val[1], T1.val[1]);
-
-         B0.m_simd = O0.val[0];
-         B1.m_simd = O0.val[1];
-         B2.m_simd = O1.val[0];
-         B3.m_simd = O1.val[1];
-
-#elif defined(BOTAN_SIMD_USE_NEON) && defined(BOTAN_TARGET_ARCH_IS_ARM64)
-         const uint32x4_t T0 = vzip1q_u32(B0.m_simd, B2.m_simd);
-         const uint32x4_t T2 = vzip2q_u32(B0.m_simd, B2.m_simd);
-         const uint32x4_t T1 = vzip1q_u32(B1.m_simd, B3.m_simd);
-         const uint32x4_t T3 = vzip2q_u32(B1.m_simd, B3.m_simd);
-
-         B0.m_simd = vzip1q_u32(T0, T1);
-         B1.m_simd = vzip2q_u32(T0, T1);
-         B2.m_simd = vzip1q_u32(T2, T3);
-         B3.m_simd = vzip2q_u32(T2, T3);
-#elif defined(BOTAN_SIMD_USE_LSX)
-         const __m128i T0 = __lsx_vilvl_w(B2.raw(), B0.raw());
-         const __m128i T1 = __lsx_vilvh_w(B2.raw(), B0.raw());
-         const __m128i T2 = __lsx_vilvl_w(B3.raw(), B1.raw());
-         const __m128i T3 = __lsx_vilvh_w(B3.raw(), B1.raw());
-         B0.m_simd = __lsx_vilvl_w(T2, T0);
-         B1.m_simd = __lsx_vilvh_w(T2, T0);
-         B2.m_simd = __lsx_vilvl_w(T3, T1);
-         B3.m_simd = __lsx_vilvh_w(T3, T1);
-#endif
-      }
-
-      static inline SIMD_4x32 choose(const SIMD_4x32& mask, const SIMD_4x32& a, const SIMD_4x32& b) noexcept {
-#if defined(BOTAN_SIMD_USE_ALTIVEC)
-         return SIMD_4x32(vec_sel(b.raw(), a.raw(), mask.raw()));
-#elif defined(BOTAN_SIMD_USE_NEON)
-         return SIMD_4x32(vbslq_u32(mask.raw(), a.raw(), b.raw()));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vbitsel_v(b.raw(), a.raw(), mask.raw()));
-#else
-         return (mask & a) ^ mask.andc(b);
-#endif
-      }
-
-      static inline SIMD_4x32 majority(const SIMD_4x32& x, const SIMD_4x32& y, const SIMD_4x32& z) noexcept {
-         return SIMD_4x32::choose(x ^ y, z, y);
-      }
-
-      /**
-      * Byte shuffle
-      *
-      * This function assumes that each byte of idx is <= 16; it may produce incorrect
-      * results if this does not hold.
-      */
-      static inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 byte_shuffle(const SIMD_4x32& tbl, const SIMD_4x32& idx) {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         return SIMD_4x32(_mm_shuffle_epi8(tbl.raw(), idx.raw()));
-#elif defined(BOTAN_SIMD_USE_NEON)
-         const uint8x16_t tbl8 = vreinterpretq_u8_u32(tbl.raw());
-         const uint8x16_t idx8 = vreinterpretq_u8_u32(idx.raw());
-
-   #if defined(BOTAN_TARGET_ARCH_IS_ARM32)
-         const uint8x8x2_t tbl2 = {vget_low_u8(tbl8), vget_high_u8(tbl8)};
-
-         return SIMD_4x32(
-            vreinterpretq_u32_u8(vcombine_u8(vtbl2_u8(tbl2, vget_low_u8(idx8)), vtbl2_u8(tbl2, vget_high_u8(idx8)))));
-   #else
-         return SIMD_4x32(vreinterpretq_u32_u8(vqtbl1q_u8(tbl8, idx8)));
-   #endif
-
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         const auto r = vec_perm(reinterpret_cast<__vector signed char>(tbl.raw()),
-                                 reinterpret_cast<__vector signed char>(tbl.raw()),
-                                 reinterpret_cast<__vector unsigned char>(idx.raw()));
-         return SIMD_4x32(reinterpret_cast<__vector unsigned int>(r));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vshuf_b(tbl.raw(), tbl.raw(), idx.raw()));
-#endif
-      }
-
-      /**
-      * Byte shuffle with masking
-      *
-      * If the index is >= 128 then the output byte is set to zero.
-      *
-      * Warning: for indices between 16 and 128 this function may have different
-      * behaviors depending on the CPU; possibly the output is zero, tbl[idx % 16],
-      * or even undefined.
-      */
-      inline static SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 masked_byte_shuffle(const SIMD_4x32& tbl, const SIMD_4x32& idx) {
-#if defined(BOTAN_SIMD_USE_ALTIVEC)
-         const auto zero = vec_splat_s8(0x00);
-         const auto mask = vec_cmplt(reinterpret_cast<__vector signed char>(idx.raw()), zero);
-         const auto r = vec_perm(reinterpret_cast<__vector signed char>(tbl.raw()),
-                                 reinterpret_cast<__vector signed char>(tbl.raw()),
-                                 reinterpret_cast<__vector unsigned char>(idx.raw()));
-         return SIMD_4x32(reinterpret_cast<__vector unsigned int>(vec_sel(r, zero, mask)));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         /*
-         * The behavior of vshuf.b unfortunately differs among microarchitectures
-         * when the index is larger than the available elements. In LA664 CPUs,
-         * larger indices result in a zero byte, which is exactly what we want.
-         * Unfortunately on LA464 machines, the output is instead undefined.
-         *
-         * So we must use a slower sequence that handles the larger indices.
-         * If we had a way of knowing at compile time that we are on an LA664
-         * or later, we could use __lsx_vshuf_b without the comparison or select.
-         */
-         const auto zero = __lsx_vldi(0);
-         const auto r = __lsx_vshuf_b(zero, tbl.raw(), idx.raw());
-         const auto mask = __lsx_vslti_bu(idx.raw(), 16);
-         return SIMD_4x32(__lsx_vbitsel_v(zero, r, mask));
-#else
-         // ARM and x86 byte shuffles have the behavior we want for out of range idx
-         return SIMD_4x32::byte_shuffle(tbl, idx);
-#endif
-      }
-
-      static inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 alignr4(const SIMD_4x32& a, const SIMD_4x32& b) {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         return SIMD_4x32(_mm_alignr_epi8(a.raw(), b.raw(), 4));
-#elif defined(BOTAN_SIMD_USE_NEON)
-         return SIMD_4x32(vextq_u32(b.raw(), a.raw(), 1));
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         const __vector unsigned char mask = {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19};
-         return SIMD_4x32(vec_perm(b.raw(), a.raw(), mask));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         const auto mask = SIMD_4x32(0x07060504, 0x0B0A0908, 0x0F0E0D0C, 0x13121110);
-         return SIMD_4x32(__lsx_vshuf_b(a.raw(), b.raw(), mask.raw()));
-#endif
-      }
-
-      static inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 alignr8(const SIMD_4x32& a, const SIMD_4x32& b) {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-         return SIMD_4x32(_mm_alignr_epi8(a.raw(), b.raw(), 8));
-#elif defined(BOTAN_SIMD_USE_NEON)
-         return SIMD_4x32(vextq_u32(b.raw(), a.raw(), 2));
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-         const __vector unsigned char mask = {8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23};
-         return SIMD_4x32(vec_perm(b.raw(), a.raw(), mask));
-#elif defined(BOTAN_SIMD_USE_LSX)
-         return SIMD_4x32(__lsx_vshuf4i_d(a.raw(), b.raw(), 0b0011));
-#endif
-      }
-
-      native_simd_type raw() const noexcept { return m_simd; }
-
-      explicit SIMD_4x32(native_simd_type x) noexcept : m_simd(x) {}
-
-   private:
-      native_simd_type m_simd;
-};
-
-// NOLINTEND(portability-simd-intrinsics)
-
-template <size_t R>
-inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 rotl(SIMD_4x32 input) {
-   return input.rotl<R>();
-}
-
-template <size_t R>
-inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 rotr(SIMD_4x32 input) {
-   return input.rotr<R>();
-}
-
-// For Serpent:
-template <size_t S>
-inline SIMD_4x32 shl(SIMD_4x32 input) {
-   return input.shl<S>();
-}
 
 }  // namespace Botan
 
@@ -11333,7 +11839,7 @@ class FullWordBounds final {
 
       void write_into(BufferStuffer& stuffer, word_t full_word) const { stuffer.append(store_le(full_word)); }
 
-      word_t masked_assignment(word_t, word_t full_input_word) const { return full_input_word; }
+      word_t masked_assignment(word_t /*unused*/, word_t full_input_word) const { return full_input_word; }
 };
 
 template <typename T>
@@ -11518,6 +12024,144 @@ inline void squeeze_from_sponge(detail::SpongeLikeWithTrivialPermute auto& spong
    #endif
 #endif
 
+namespace Botan {
+
+/**
+ * Reduce the values of @p keys into an accumulator initialized with @p acc using
+ * the reducer function @p reducer.
+ *
+ * The @p reducer is a function taking the accumulator and a single key to return the
+ * new accumulator. Keys are consecutively reduced into the accumulator.
+ *
+ * @return the accumulator containing the reduction of @p keys
+ */
+template <typename RetT, typename KeyT, typename ReducerT>
+RetT reduce(const std::vector<KeyT>& keys, RetT acc, ReducerT reducer)
+   requires std::invocable<ReducerT&, RetT, const KeyT&> &&
+            std::convertible_to<std::invoke_result_t<ReducerT&, RetT, const KeyT&>, RetT>
+{
+   for(const KeyT& key : keys) {
+      acc = reducer(std::move(acc), key);
+   }
+   return acc;
+}
+
+/**
+* Existence check for values
+*/
+template <typename T, typename V>
+bool value_exists(const std::vector<T>& vec, const V& val) {
+   for(const auto& elem : vec) {
+      if(elem == val) {
+         return true;
+      }
+   }
+   return false;
+}
+
+template <typename T, typename Pred>
+void map_remove_if(Pred pred, T& assoc) {
+   auto i = assoc.begin();
+   while(i != assoc.end()) {
+      if(pred(i->first)) {
+         assoc.erase(i++);
+      } else {
+         i++;
+      }
+   }
+}
+
+template <typename... Alts, typename... Ts>
+constexpr bool holds_any_of(const std::variant<Ts...>& v) noexcept {
+   return (std::holds_alternative<Alts>(v) || ...);
+}
+
+template <typename GeneralVariantT, typename SpecialT>
+constexpr bool is_generalizable_to(const SpecialT& /*unnamed*/) noexcept {
+   return std::is_constructible_v<GeneralVariantT, SpecialT>;
+}
+
+template <typename GeneralVariantT, typename... SpecialTs>
+constexpr bool is_generalizable_to(const std::variant<SpecialTs...>& /*unnamed*/) noexcept {
+   return (std::is_constructible_v<GeneralVariantT, SpecialTs> && ...);
+}
+
+/**
+ * @brief Converts a given variant into another variant-ish whose type states
+ *        are a super set of the given variant.
+ *
+ * This is useful to convert restricted variant types into more general
+ * variants types.
+ */
+template <typename GeneralVariantT, typename SpecialT>
+constexpr GeneralVariantT generalize_to(SpecialT&& specific)
+   requires(std::is_constructible_v<GeneralVariantT, std::decay_t<SpecialT>>)
+{
+   return std::forward<SpecialT>(specific);
+}
+
+/**
+ * @brief Converts a given variant into another variant-ish whose type states
+ *        are a super set of the given variant.
+ *
+ * This is useful to convert restricted variant types into more general
+ * variants types.
+ */
+template <typename GeneralVariantT, typename... SpecialTs>
+constexpr GeneralVariantT generalize_to(std::variant<SpecialTs...> specific) {
+   static_assert(
+      is_generalizable_to<GeneralVariantT>(specific),
+      "Desired general type must be implicitly constructible by all types of the specialized std::variant<>");
+   return std::visit([](auto s) -> GeneralVariantT { return s; }, std::move(specific));
+}
+
+// This is a helper utility to emulate pattern matching with std::visit.
+// See https://en.cppreference.com/w/cpp/utility/variant/visit for more info.
+template <class... Ts>
+struct overloaded : Ts... {
+      using Ts::operator()...;
+};
+// explicit deduction guide (not needed as of C++20)
+template <class... Ts>
+overloaded(Ts...) -> overloaded<Ts...>;
+
+// TODO: C++23: replace with std::to_underlying
+template <typename T>
+   requires std::is_enum_v<T>
+auto to_underlying(T e) noexcept {
+   return static_cast<std::underlying_type_t<T>>(e);
+}
+
+// TODO: C++23 - use std::out_ptr
+template <typename T>
+[[nodiscard]] constexpr auto out_ptr(T& outptr) noexcept {
+   class out_ptr_t {
+      public:
+         constexpr ~out_ptr_t() noexcept {
+            m_ptr.reset(m_rawptr);
+            m_rawptr = nullptr;
+         }
+
+         constexpr explicit out_ptr_t(T& outptr) noexcept : m_ptr(outptr), m_rawptr(nullptr) {}
+
+         out_ptr_t(const out_ptr_t&) = delete;
+         out_ptr_t(out_ptr_t&&) = delete;
+         out_ptr_t& operator=(const out_ptr_t&) = delete;
+         out_ptr_t& operator=(out_ptr_t&&) = delete;
+
+         // NOLINTNEXTLINE(*-explicit-conversions) - Implicit by design for C API interop
+         [[nodiscard]] constexpr operator typename T::element_type **() && noexcept { return &m_rawptr; }
+
+      private:
+         T& m_ptr;
+         typename T::element_type* m_rawptr;
+   };
+
+   return out_ptr_t{outptr};
+}
+
+}  // namespace Botan
+
 
 #if defined(BOTAN_HAS_STREAM_CIPHER)
 #endif
@@ -11592,13 +12236,12 @@ class Stream_Cipher_Mode final : public Cipher_Mode {
 #if defined(BOTAN_HAS_OS_UTILS)
 #endif
 
-
 namespace Botan {
 
 template <typename F>
-uint64_t measure_cost(std::chrono::milliseconds trial_msec, F func) {
+uint64_t measure_cost(uint64_t trial_msec, F func) {
 #if defined(BOTAN_HAS_OS_UTILS)
-   const uint64_t trial_nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(trial_msec).count();
+   const uint64_t trial_nsec = trial_msec * 1000000;
 
    uint64_t total_nsec = 0;
    uint64_t trials = 0;
@@ -11629,11 +12272,11 @@ uint64_t measure_cost(std::chrono::milliseconds trial_msec, F func) {
 }  // namespace Botan
 /* NOLINTBEGIN(*-macro-usage) */
 
-#define BOTAN_FULL_VERSION_STRING "Botan 3.10.0 (release, dated 20251106, revision git:e27d332089247f04e89854a2e60a3af2ec4e430f)"
+#define BOTAN_FULL_VERSION_STRING "Botan 3.11.1 (release, dated 20260331, revision git:86d105523def181ae833e3aaaf773b1b0c20dda4)"
 
-#define BOTAN_SHORT_VERSION_STRING "3.10.0"
+#define BOTAN_SHORT_VERSION_STRING "3.11.1"
 
-#define BOTAN_VC_REVISION "git:e27d332089247f04e89854a2e60a3af2ec4e430f"
+#define BOTAN_VC_REVISION "git:86d105523def181ae833e3aaaf773b1b0c20dda4"
 
 
 /* NOLINTEND(*-macro-usage) */
@@ -11783,7 +12426,7 @@ std::unique_ptr<AEAD_Mode> AEAD_Mode::create(std::string_view algo, Cipher_Dir d
 
    if(algo.find('/') != std::string::npos) {
       const std::vector<std::string> algo_parts = split_on(algo, '/');
-      std::string_view cipher_name = algo_parts[0];
+      const std::string_view cipher_name = algo_parts[0];
       const std::vector<std::string> mode_info = parse_algorithm_name(algo_parts[1]);
 
       if(mode_info.empty()) {
@@ -11806,7 +12449,7 @@ std::unique_ptr<AEAD_Mode> AEAD_Mode::create(std::string_view algo, Cipher_Dir d
 
 #if defined(BOTAN_HAS_BLOCK_CIPHER)
 
-   SCAN_Name req(algo);
+   const SCAN_Name req(algo);
 
    if(req.arg_count() == 0) {
       return std::unique_ptr<AEAD_Mode>();
@@ -11820,8 +12463,8 @@ std::unique_ptr<AEAD_Mode> AEAD_Mode::create(std::string_view algo, Cipher_Dir d
 
    #if defined(BOTAN_HAS_AEAD_CCM)
    if(req.algo_name() == "CCM") {
-      size_t tag_len = req.arg_as_integer(1, 16);
-      size_t L_len = req.arg_as_integer(2, 3);
+      const size_t tag_len = req.arg_as_integer(1, 16);
+      const size_t L_len = req.arg_as_integer(2, 3);
       if(dir == Cipher_Dir::Encryption) {
          return std::make_unique<CCM_Encryption>(std::move(bc), tag_len, L_len);
       } else {
@@ -11832,7 +12475,7 @@ std::unique_ptr<AEAD_Mode> AEAD_Mode::create(std::string_view algo, Cipher_Dir d
 
    #if defined(BOTAN_HAS_AEAD_GCM)
    if(req.algo_name() == "GCM") {
-      size_t tag_len = req.arg_as_integer(1, 16);
+      const size_t tag_len = req.arg_as_integer(1, 16);
       if(dir == Cipher_Dir::Encryption) {
          return std::make_unique<GCM_Encryption>(std::move(bc), tag_len);
       } else {
@@ -11843,7 +12486,7 @@ std::unique_ptr<AEAD_Mode> AEAD_Mode::create(std::string_view algo, Cipher_Dir d
 
    #if defined(BOTAN_HAS_AEAD_OCB)
    if(req.algo_name() == "OCB") {
-      size_t tag_len = req.arg_as_integer(1, 16);
+      const size_t tag_len = req.arg_as_integer(1, 16);
       if(dir == Cipher_Dir::Encryption) {
          return std::make_unique<OCB_Encryption>(std::move(bc), tag_len);
       } else {
@@ -11854,7 +12497,7 @@ std::unique_ptr<AEAD_Mode> AEAD_Mode::create(std::string_view algo, Cipher_Dir d
 
    #if defined(BOTAN_HAS_AEAD_EAX)
    if(req.algo_name() == "EAX") {
-      size_t tag_len = req.arg_as_integer(1, bc->block_size());
+      const size_t tag_len = req.arg_as_integer(1, bc->block_size());
       if(dir == Cipher_Dir::Encryption) {
          return std::make_unique<EAX_Encryption>(std::move(bc), tag_len);
       } else {
@@ -13451,6 +14094,7 @@ BOTAN_FN_ISA_AES void AES_256::hw_aes_decrypt_n(const uint8_t in[], uint8_t out[
 
 
 #include <bit>
+#include <utility>
 
 namespace Botan {
 
@@ -13472,92 +14116,38 @@ inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 masked_shuffle(SIMD_4x32 tbl, SIMD_4x32 
    }
 }
 
-const SIMD_4x32 k_ipt1 = SIMD_4x32(0x5A2A7000, 0xC2B2E898, 0x52227808, 0xCABAE090);
-const SIMD_4x32 k_ipt2 = SIMD_4x32(0x317C4D00, 0x4C01307D, 0xB0FDCC81, 0xCD80B1FC);
+inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 shiftrows(SIMD_4x32 x, size_t r) {
+   const SIMD_4x32 vperm_sr[4] = {
+      SIMD_4x32(0x03020100, 0x07060504, 0x0B0A0908, 0x0F0E0D0C),
+      SIMD_4x32(0x0F0A0500, 0x030E0904, 0x07020D08, 0x0B06010C),
+      SIMD_4x32(0x0B020900, 0x0F060D04, 0x030A0108, 0x070E050C),
+      SIMD_4x32(0x070A0D00, 0x0B0E0104, 0x0F020508, 0x0306090C),
+   };
 
-const SIMD_4x32 k_inv1 = SIMD_4x32(0x0D080180, 0x0E05060F, 0x0A0B0C02, 0x04070309);
-const SIMD_4x32 k_inv2 = SIMD_4x32(0x0F0B0780, 0x01040A06, 0x02050809, 0x030D0E0C);
+   return shuffle(x, vperm_sr[r]);
+}
 
-const SIMD_4x32 sb1u = SIMD_4x32(0xCB503E00, 0xB19BE18F, 0x142AF544, 0xA5DF7A6E);
-const SIMD_4x32 sb1t = SIMD_4x32(0xFAE22300, 0x3618D415, 0x0D2ED9EF, 0x3BF7CCC1);
-const SIMD_4x32 sbou = SIMD_4x32(0x6FBDC700, 0xD0D26D17, 0xC502A878, 0x15AABF7A);
-const SIMD_4x32 sbot = SIMD_4x32(0x5FBB6A00, 0xCFE474A5, 0x412B35FA, 0x8E1E90D1);
-
-const SIMD_4x32 sboud = SIMD_4x32(0x7EF94000, 0x1387EA53, 0xD4943E2D, 0xC7AA6DB9);
-const SIMD_4x32 sbotd = SIMD_4x32(0x93441D00, 0x12D7560F, 0xD8C58E9C, 0xCA4B8159);
-
-const SIMD_4x32 mc_forward[4] = {SIMD_4x32(0x00030201, 0x04070605, 0x080B0A09, 0x0C0F0E0D),
-                                 SIMD_4x32(0x04070605, 0x080B0A09, 0x0C0F0E0D, 0x00030201),
-                                 SIMD_4x32(0x080B0A09, 0x0C0F0E0D, 0x00030201, 0x04070605),
-                                 SIMD_4x32(0x0C0F0E0D, 0x00030201, 0x04070605, 0x080B0A09)};
-
-const SIMD_4x32 vperm_sr[4] = {
-   SIMD_4x32(0x03020100, 0x07060504, 0x0B0A0908, 0x0F0E0D0C),
-   SIMD_4x32(0x0F0A0500, 0x030E0904, 0x07020D08, 0x0B06010C),
-   SIMD_4x32(0x0B020900, 0x0F060D04, 0x030A0108, 0x070E050C),
-   SIMD_4x32(0x070A0D00, 0x0B0E0104, 0x0F020508, 0x0306090C),
-};
-
-const SIMD_4x32 rcon[10] = {
-   SIMD_4x32(0x00000070, 0x00000000, 0x00000000, 0x00000000),
-   SIMD_4x32(0x0000002A, 0x00000000, 0x00000000, 0x00000000),
-   SIMD_4x32(0x00000098, 0x00000000, 0x00000000, 0x00000000),
-   SIMD_4x32(0x00000008, 0x00000000, 0x00000000, 0x00000000),
-   SIMD_4x32(0x0000004D, 0x00000000, 0x00000000, 0x00000000),
-   SIMD_4x32(0x0000007C, 0x00000000, 0x00000000, 0x00000000),
-   SIMD_4x32(0x0000007D, 0x00000000, 0x00000000, 0x00000000),
-   SIMD_4x32(0x00000081, 0x00000000, 0x00000000, 0x00000000),
-   SIMD_4x32(0x0000001F, 0x00000000, 0x00000000, 0x00000000),
-   SIMD_4x32(0x00000083, 0x00000000, 0x00000000, 0x00000000),
-};
-
-const SIMD_4x32 sb2u = SIMD_4x32(0x0B712400, 0xE27A93C6, 0xBC982FCD, 0x5EB7E955);
-const SIMD_4x32 sb2t = SIMD_4x32(0x0AE12900, 0x69EB8840, 0xAB82234A, 0xC2A163C8);
-
-const SIMD_4x32 k_dipt1 = SIMD_4x32(0x0B545F00, 0x0F505B04, 0x114E451A, 0x154A411E);
-const SIMD_4x32 k_dipt2 = SIMD_4x32(0x60056500, 0x86E383E6, 0xF491F194, 0x12771772);
-
-const SIMD_4x32 sb9u = SIMD_4x32(0x9A86D600, 0x851C0353, 0x4F994CC9, 0xCAD51F50);
-const SIMD_4x32 sb9t = SIMD_4x32(0xECD74900, 0xC03B1789, 0xB2FBA565, 0x725E2C9E);
-
-const SIMD_4x32 sbeu = SIMD_4x32(0x26D4D000, 0x46F29296, 0x64B4F6B0, 0x22426004);
-const SIMD_4x32 sbet = SIMD_4x32(0xFFAAC100, 0x0C55A6CD, 0x98593E32, 0x9467F36B);
-
-const SIMD_4x32 sbdu = SIMD_4x32(0xE6B1A200, 0x7D57CCDF, 0x882A4439, 0xF56E9B13);
-const SIMD_4x32 sbdt = SIMD_4x32(0x24C6CB00, 0x3CE2FAF7, 0x15DEEFD3, 0x2931180D);
-
-const SIMD_4x32 sbbu = SIMD_4x32(0x96B44200, 0xD0226492, 0xB0F2D404, 0x602646F6);
-const SIMD_4x32 sbbt = SIMD_4x32(0xCD596700, 0xC19498A6, 0x3255AA6B, 0xF3FF0C3E);
-
-const SIMD_4x32 mcx[4] = {
-   SIMD_4x32(0x0C0F0E0D, 0x00030201, 0x04070605, 0x080B0A09),
-   SIMD_4x32(0x080B0A09, 0x0C0F0E0D, 0x00030201, 0x04070605),
-   SIMD_4x32(0x04070605, 0x080B0A09, 0x0C0F0E0D, 0x00030201),
-   SIMD_4x32(0x00030201, 0x04070605, 0x080B0A09, 0x0C0F0E0D),
-};
-
-const SIMD_4x32 mc_backward[4] = {
-   SIMD_4x32(0x02010003, 0x06050407, 0x0A09080B, 0x0E0D0C0F),
-   SIMD_4x32(0x0E0D0C0F, 0x02010003, 0x06050407, 0x0A09080B),
-   SIMD_4x32(0x0A09080B, 0x0E0D0C0F, 0x02010003, 0x06050407),
-   SIMD_4x32(0x06050407, 0x0A09080B, 0x0E0D0C0F, 0x02010003),
-};
-
-const SIMD_4x32 lo_nibs_mask = SIMD_4x32::splat_u8(0x0F);
-
-inline SIMD_4x32 low_nibs(SIMD_4x32 x) {
+inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 low_nibs(SIMD_4x32 x) {
+   const SIMD_4x32 lo_nibs_mask = SIMD_4x32::splat_u8(0x0F);
    return lo_nibs_mask & x;
 }
 
-inline SIMD_4x32 high_nibs(SIMD_4x32 x) {
+inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 high_nibs(SIMD_4x32 x) {
+   const SIMD_4x32 lo_nibs_mask = SIMD_4x32::splat_u8(0x0F);
    return (x.shr<4>() & lo_nibs_mask);
 }
 
 inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_enc_first_round(SIMD_4x32 B, SIMD_4x32 K) {
+   const SIMD_4x32 k_ipt1 = SIMD_4x32(0x5A2A7000, 0xC2B2E898, 0x52227808, 0xCABAE090);
+   const SIMD_4x32 k_ipt2 = SIMD_4x32(0x317C4D00, 0x4C01307D, 0xB0FDCC81, 0xCD80B1FC);
+
    return shuffle(k_ipt1, low_nibs(B)) ^ shuffle(k_ipt2, high_nibs(B)) ^ K;
 }
 
-inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_enc_round(SIMD_4x32 B, SIMD_4x32 K, size_t r) {
+BOTAN_FORCE_INLINE BOTAN_FN_ISA_SIMD_4X32 std::pair<SIMD_4x32, SIMD_4x32> aes_decompose_kinv(const SIMD_4x32 B) {
+   const SIMD_4x32 k_inv1 = SIMD_4x32(0x0D080180, 0x0E05060F, 0x0A0B0C02, 0x04070309);
+   const SIMD_4x32 k_inv2 = SIMD_4x32(0x0F0B0780, 0x01040A06, 0x02050809, 0x030D0E0C);
+
    const SIMD_4x32 Bh = high_nibs(B);
    SIMD_4x32 Bl = low_nibs(B);
    const SIMD_4x32 t2 = shuffle(k_inv2, Bl);
@@ -13565,6 +14155,28 @@ inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_enc_round(SIMD_4x32 B, SIMD_4x32 K, 
 
    const SIMD_4x32 t5 = Bl ^ masked_shuffle(k_inv1, t2 ^ shuffle(k_inv1, Bh));
    const SIMD_4x32 t6 = Bh ^ masked_shuffle(k_inv1, t2 ^ shuffle(k_inv1, Bl));
+
+   return std::make_pair(t5, t6);
+}
+
+inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_enc_round(SIMD_4x32 B, SIMD_4x32 K, size_t r) {
+   const SIMD_4x32 sb2u = SIMD_4x32(0x0B712400, 0xE27A93C6, 0xBC982FCD, 0x5EB7E955);
+   const SIMD_4x32 sb2t = SIMD_4x32(0x0AE12900, 0x69EB8840, 0xAB82234A, 0xC2A163C8);
+
+   const SIMD_4x32 mc_forward[4] = {SIMD_4x32(0x00030201, 0x04070605, 0x080B0A09, 0x0C0F0E0D),
+                                    SIMD_4x32(0x04070605, 0x080B0A09, 0x0C0F0E0D, 0x00030201),
+                                    SIMD_4x32(0x080B0A09, 0x0C0F0E0D, 0x00030201, 0x04070605),
+                                    SIMD_4x32(0x0C0F0E0D, 0x00030201, 0x04070605, 0x080B0A09)};
+   const SIMD_4x32 mc_backward[4] = {
+      SIMD_4x32(0x02010003, 0x06050407, 0x0A09080B, 0x0E0D0C0F),
+      SIMD_4x32(0x0E0D0C0F, 0x02010003, 0x06050407, 0x0A09080B),
+      SIMD_4x32(0x0A09080B, 0x0E0D0C0F, 0x02010003, 0x06050407),
+      SIMD_4x32(0x06050407, 0x0A09080B, 0x0E0D0C0F, 0x02010003),
+   };
+   const SIMD_4x32 sb1u = SIMD_4x32(0xCB503E00, 0xB19BE18F, 0x142AF544, 0xA5DF7A6E);
+   const SIMD_4x32 sb1t = SIMD_4x32(0xFAE22300, 0x3618D415, 0x0D2ED9EF, 0x3BF7CCC1);
+
+   const auto [t5, t6] = aes_decompose_kinv(B);
 
    const SIMD_4x32 t7 = masked_shuffle(sb1t, t6) ^ masked_shuffle(sb1u, t5) ^ K;
    const SIMD_4x32 t8 = masked_shuffle(sb2t, t6) ^ masked_shuffle(sb2u, t5) ^ shuffle(t7, mc_forward[r % 4]);
@@ -13573,30 +14185,39 @@ inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_enc_round(SIMD_4x32 B, SIMD_4x32 K, 
 }
 
 inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_enc_last_round(SIMD_4x32 B, SIMD_4x32 K, size_t r) {
-   const SIMD_4x32 Bh = high_nibs(B);
-   SIMD_4x32 Bl = low_nibs(B);
-   const SIMD_4x32 t2 = shuffle(k_inv2, Bl);
-   Bl ^= Bh;
+   const SIMD_4x32 sbou = SIMD_4x32(0x6FBDC700, 0xD0D26D17, 0xC502A878, 0x15AABF7A);
+   const SIMD_4x32 sbot = SIMD_4x32(0x5FBB6A00, 0xCFE474A5, 0x412B35FA, 0x8E1E90D1);
 
-   const SIMD_4x32 t5 = Bl ^ masked_shuffle(k_inv1, t2 ^ shuffle(k_inv1, Bh));
-   const SIMD_4x32 t6 = Bh ^ masked_shuffle(k_inv1, t2 ^ shuffle(k_inv1, Bl));
+   const auto [t5, t6] = aes_decompose_kinv(B);
 
-   return shuffle(masked_shuffle(sbou, t5) ^ masked_shuffle(sbot, t6) ^ K, vperm_sr[r % 4]);
+   return shiftrows(masked_shuffle(sbou, t5) ^ masked_shuffle(sbot, t6) ^ K, r % 4);
 }
 
 inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_dec_first_round(SIMD_4x32 B, SIMD_4x32 K) {
+   const SIMD_4x32 k_dipt1 = SIMD_4x32(0x0B545F00, 0x0F505B04, 0x114E451A, 0x154A411E);
+   const SIMD_4x32 k_dipt2 = SIMD_4x32(0x60056500, 0x86E383E6, 0xF491F194, 0x12771772);
+
    return shuffle(k_dipt1, low_nibs(B)) ^ shuffle(k_dipt2, high_nibs(B)) ^ K;
 }
 
 inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_dec_round(SIMD_4x32 B, SIMD_4x32 K, size_t r) {
-   const SIMD_4x32 Bh = high_nibs(B);
-   B = low_nibs(B);
-   const SIMD_4x32 t2 = shuffle(k_inv2, B);
+   const SIMD_4x32 mcx[4] = {
+      SIMD_4x32(0x0C0F0E0D, 0x00030201, 0x04070605, 0x080B0A09),
+      SIMD_4x32(0x080B0A09, 0x0C0F0E0D, 0x00030201, 0x04070605),
+      SIMD_4x32(0x04070605, 0x080B0A09, 0x0C0F0E0D, 0x00030201),
+      SIMD_4x32(0x00030201, 0x04070605, 0x080B0A09, 0x0C0F0E0D),
+   };
 
-   B ^= Bh;
+   const SIMD_4x32 sbbu = SIMD_4x32(0x96B44200, 0xD0226492, 0xB0F2D404, 0x602646F6);
+   const SIMD_4x32 sbbt = SIMD_4x32(0xCD596700, 0xC19498A6, 0x3255AA6B, 0xF3FF0C3E);
+   const SIMD_4x32 sbdu = SIMD_4x32(0xE6B1A200, 0x7D57CCDF, 0x882A4439, 0xF56E9B13);
+   const SIMD_4x32 sbdt = SIMD_4x32(0x24C6CB00, 0x3CE2FAF7, 0x15DEEFD3, 0x2931180D);
+   const SIMD_4x32 sbeu = SIMD_4x32(0x26D4D000, 0x46F29296, 0x64B4F6B0, 0x22426004);
+   const SIMD_4x32 sbet = SIMD_4x32(0xFFAAC100, 0x0C55A6CD, 0x98593E32, 0x9467F36B);
+   const SIMD_4x32 sb9u = SIMD_4x32(0x9A86D600, 0x851C0353, 0x4F994CC9, 0xCAD51F50);
+   const SIMD_4x32 sb9t = SIMD_4x32(0xECD74900, 0xC03B1789, 0xB2FBA565, 0x725E2C9E);
 
-   const SIMD_4x32 t5 = B ^ masked_shuffle(k_inv1, t2 ^ shuffle(k_inv1, Bh));
-   const SIMD_4x32 t6 = Bh ^ masked_shuffle(k_inv1, t2 ^ shuffle(k_inv1, B));
+   const auto [t5, t6] = aes_decompose_kinv(B);
 
    const SIMD_4x32 mc = mcx[(r - 1) % 4];
 
@@ -13607,19 +14228,15 @@ inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_dec_round(SIMD_4x32 B, SIMD_4x32 K, 
 }
 
 inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_dec_last_round(SIMD_4x32 B, SIMD_4x32 K, size_t r) {
+   const SIMD_4x32 sboud = SIMD_4x32(0x7EF94000, 0x1387EA53, 0xD4943E2D, 0xC7AA6DB9);
+   const SIMD_4x32 sbotd = SIMD_4x32(0x93441D00, 0x12D7560F, 0xD8C58E9C, 0xCA4B8159);
+
    const uint32_t which_sr = ((((r - 1) << 4) ^ 48) & 48) / 16;
 
-   const SIMD_4x32 Bh = high_nibs(B);
-   B = low_nibs(B);
-   const SIMD_4x32 t2 = shuffle(k_inv2, B);
-
-   B ^= Bh;
-
-   const SIMD_4x32 t5 = B ^ masked_shuffle(k_inv1, t2 ^ shuffle(k_inv1, Bh));
-   const SIMD_4x32 t6 = Bh ^ masked_shuffle(k_inv1, t2 ^ shuffle(k_inv1, B));
+   const auto [t5, t6] = aes_decompose_kinv(B);
 
    const SIMD_4x32 x = masked_shuffle(sboud, t5) ^ masked_shuffle(sbotd, t6) ^ K;
-   return shuffle(x, vperm_sr[which_sr]);
+   return shiftrows(x, which_sr);
 }
 
 void BOTAN_FN_ISA_SIMD_4X32
@@ -13708,7 +14325,7 @@ vperm_decrypt_blocks(const uint8_t in[], uint8_t out[], size_t blocks, const SIM
 
 }  // namespace
 
-void AES_128::vperm_encrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
+void BOTAN_FN_ISA_SIMD_4X32 AES_128::vperm_encrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
    const SIMD_4x32 K[11] = {
       SIMD_4x32::load_le(&m_EK[4 * 0]),
       SIMD_4x32::load_le(&m_EK[4 * 1]),
@@ -13726,7 +14343,7 @@ void AES_128::vperm_encrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) 
    return vperm_encrypt_blocks(in, out, blocks, K, 10);
 }
 
-void AES_128::vperm_decrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
+void BOTAN_FN_ISA_SIMD_4X32 AES_128::vperm_decrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
    const SIMD_4x32 K[11] = {
       SIMD_4x32::load_le(&m_DK[4 * 0]),
       SIMD_4x32::load_le(&m_DK[4 * 1]),
@@ -13744,7 +14361,7 @@ void AES_128::vperm_decrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) 
    return vperm_decrypt_blocks(in, out, blocks, K, 10);
 }
 
-void AES_192::vperm_encrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
+void BOTAN_FN_ISA_SIMD_4X32 AES_192::vperm_encrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
    const SIMD_4x32 K[13] = {
       SIMD_4x32::load_le(&m_EK[4 * 0]),
       SIMD_4x32::load_le(&m_EK[4 * 1]),
@@ -13764,7 +14381,7 @@ void AES_192::vperm_encrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) 
    return vperm_encrypt_blocks(in, out, blocks, K, 12);
 }
 
-void AES_192::vperm_decrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
+void BOTAN_FN_ISA_SIMD_4X32 AES_192::vperm_decrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
    const SIMD_4x32 K[13] = {
       SIMD_4x32::load_le(&m_DK[4 * 0]),
       SIMD_4x32::load_le(&m_DK[4 * 1]),
@@ -13784,7 +14401,7 @@ void AES_192::vperm_decrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) 
    return vperm_decrypt_blocks(in, out, blocks, K, 12);
 }
 
-void AES_256::vperm_encrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
+void BOTAN_FN_ISA_SIMD_4X32 AES_256::vperm_encrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
    const SIMD_4x32 K[15] = {
       SIMD_4x32::load_le(&m_EK[4 * 0]),
       SIMD_4x32::load_le(&m_EK[4 * 1]),
@@ -13806,7 +14423,7 @@ void AES_256::vperm_encrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) 
    return vperm_encrypt_blocks(in, out, blocks, K, 14);
 }
 
-void AES_256::vperm_decrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
+void BOTAN_FN_ISA_SIMD_4X32 AES_256::vperm_decrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
    const SIMD_4x32 K[15] = {
       SIMD_4x32::load_le(&m_DK[4 * 0]),
       SIMD_4x32::load_le(&m_DK[4 * 1]),
@@ -13834,6 +14451,10 @@ inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_transform(SIMD_4x32 input, 
    return shuffle(table_1, low_nibs(input)) ^ shuffle(table_2, high_nibs(input));
 }
 
+inline SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_transform_init(SIMD_4x32 input) {
+   return aes_enc_first_round(input, SIMD_4x32());
+}
+
 SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_mangle(SIMD_4x32 k, uint8_t round_no) {
    const SIMD_4x32 mc_forward0(0x00030201, 0x04070605, 0x080B0A09, 0x0C0F0E0D);
 
@@ -13841,7 +14462,7 @@ SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_mangle(SIMD_4x32 k, uint8_t round_
    SIMD_4x32 t2 = t;
    t = shuffle(t, mc_forward0);
    t2 = t ^ t2 ^ shuffle(t, mc_forward0);
-   return shuffle(t2, vperm_sr[round_no % 4]);
+   return shiftrows(t2, round_no % 4);
 }
 
 SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_mangle_dec(SIMD_4x32 k, uint8_t round_no) {
@@ -13870,15 +14491,14 @@ SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_mangle_dec(SIMD_4x32 k, uint8_t ro
    t = aes_schedule_transform(t, dsk[6], dsk[7]);
    output = shuffle(t ^ output, mc_forward0);
 
-   return shuffle(output, vperm_sr[round_no % 4]);
+   return shiftrows(output, round_no % 4);
 }
 
 SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_mangle_last(SIMD_4x32 k, uint8_t round_no) {
    const SIMD_4x32 out_tr1(0xD6B66000, 0xFF9F4929, 0xDEBE6808, 0xF7974121);
    const SIMD_4x32 out_tr2(0x50BCEC00, 0x01EDBD51, 0xB05C0CE0, 0xE10D5DB1);
 
-   k = shuffle(k, vperm_sr[round_no % 4]);
-   k ^= SIMD_4x32::splat_u8(0x5B);
+   k = shiftrows(k, round_no % 4) ^ SIMD_4x32::splat_u8(0x5B);
    return aes_schedule_transform(k, out_tr1, out_tr2);
 }
 
@@ -13891,27 +14511,35 @@ SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_mangle_last_dec(SIMD_4x32 k) {
 }
 
 SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_round(SIMD_4x32 input1, SIMD_4x32 input2) {
+   const SIMD_4x32 sb1u = SIMD_4x32(0xCB503E00, 0xB19BE18F, 0x142AF544, 0xA5DF7A6E);
+   const SIMD_4x32 sb1t = SIMD_4x32(0xFAE22300, 0x3618D415, 0x0D2ED9EF, 0x3BF7CCC1);
+
    SIMD_4x32 smeared = input2 ^ input2.shift_elems_left<1>();
    smeared ^= smeared.shift_elems_left<2>();
    smeared ^= SIMD_4x32::splat_u8(0x5B);
 
-   const SIMD_4x32 Bh = high_nibs(input1);
-   SIMD_4x32 Bl = low_nibs(input1);
-
-   const SIMD_4x32 t2 = shuffle(k_inv2, Bl);
-
-   Bl ^= Bh;
-
-   SIMD_4x32 t5 = Bl ^ masked_shuffle(k_inv1, t2 ^ shuffle(k_inv1, Bh));
-   SIMD_4x32 t6 = Bh ^ masked_shuffle(k_inv1, t2 ^ shuffle(k_inv1, Bl));
+   const auto [t5, t6] = aes_decompose_kinv(input1);
 
    return smeared ^ masked_shuffle(sb1u, t5) ^ masked_shuffle(sb1t, t6);
 }
 
-SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_round(SIMD_4x32 rc, SIMD_4x32 input1, SIMD_4x32 input2) {
+SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_round_rcon(size_t rc, SIMD_4x32 input1, SIMD_4x32 input2) {
+   const SIMD_4x32 rcon[10] = {
+      SIMD_4x32(0x00000070, 0x00000000, 0x00000000, 0x00000000),
+      SIMD_4x32(0x0000002A, 0x00000000, 0x00000000, 0x00000000),
+      SIMD_4x32(0x00000098, 0x00000000, 0x00000000, 0x00000000),
+      SIMD_4x32(0x00000008, 0x00000000, 0x00000000, 0x00000000),
+      SIMD_4x32(0x0000004D, 0x00000000, 0x00000000, 0x00000000),
+      SIMD_4x32(0x0000007C, 0x00000000, 0x00000000, 0x00000000),
+      SIMD_4x32(0x0000007D, 0x00000000, 0x00000000, 0x00000000),
+      SIMD_4x32(0x00000081, 0x00000000, 0x00000000, 0x00000000),
+      SIMD_4x32(0x0000001F, 0x00000000, 0x00000000, 0x00000000),
+      SIMD_4x32(0x00000083, 0x00000000, 0x00000000, 0x00000000),
+   };
+
    // This byte shuffle is equivalent to alignr<1>(shuffle32(input1, (3,3,3,3)));
    const SIMD_4x32 shuffle3333_15 = SIMD_4x32::splat(0x0C0F0E0D);
-   return aes_schedule_round(shuffle(input1, shuffle3333_15), input2 ^ rc);
+   return aes_schedule_round(shuffle(input1, shuffle3333_15), input2 ^ rcon[rc]);
 }
 
 SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_192_smear(SIMD_4x32 x, SIMD_4x32 y) {
@@ -13927,48 +14555,48 @@ SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 aes_schedule_192_smear(SIMD_4x32 x, SIMD_4x32 y
 
 // NOLINTBEGIN(readability-container-data-pointer)
 
-void AES_128::vperm_key_schedule(const uint8_t keyb[], size_t /*unused*/) {
+void BOTAN_FN_ISA_SIMD_4X32 AES_128::vperm_key_schedule(const uint8_t keyb[], size_t /*unused*/) {
    m_EK.resize(11 * 4);
    m_DK.resize(11 * 4);
 
    SIMD_4x32 key = SIMD_4x32::load_le(keyb);
 
-   shuffle(key, vperm_sr[2]).store_le(&m_DK[4 * 10]);
+   shiftrows(key, 2).store_le(&m_DK[4 * 10]);
 
-   key = aes_schedule_transform(key, k_ipt1, k_ipt2);
+   key = aes_schedule_transform_init(key);
    key.store_le(&m_EK[0]);
 
    for(size_t i = 1; i != 10; ++i) {
-      key = aes_schedule_round(rcon[i - 1], key, key);
+      key = aes_schedule_round_rcon(i - 1, key, key);
 
       aes_schedule_mangle(key, (12 - i) % 4).store_le(&m_EK[4 * i]);
 
       aes_schedule_mangle_dec(key, (10 - i) % 4).store_le(&m_DK[4 * (10 - i)]);
    }
 
-   key = aes_schedule_round(rcon[9], key, key);
+   key = aes_schedule_round_rcon(9, key, key);
    aes_schedule_mangle_last(key, 2).store_le(&m_EK[4 * 10]);
    aes_schedule_mangle_last_dec(key).store_le(&m_DK[0]);
 }
 
-void AES_192::vperm_key_schedule(const uint8_t keyb[], size_t /*unused*/) {
+void BOTAN_FN_ISA_SIMD_4X32 AES_192::vperm_key_schedule(const uint8_t keyb[], size_t /*unused*/) {
    m_EK.resize(13 * 4);
    m_DK.resize(13 * 4);
 
    SIMD_4x32 key1 = SIMD_4x32::load_le(keyb);
    SIMD_4x32 key2 = SIMD_4x32::load_le(keyb + 8);
 
-   shuffle(key1, vperm_sr[0]).store_le(&m_DK[12 * 4]);
+   shiftrows(key1, 0).store_le(&m_DK[12 * 4]);
 
-   key1 = aes_schedule_transform(key1, k_ipt1, k_ipt2);
-   key2 = aes_schedule_transform(key2, k_ipt1, k_ipt2);
+   key1 = aes_schedule_transform_init(key1);
+   key2 = aes_schedule_transform_init(key2);
 
    key1.store_le(&m_EK[0]);
 
    for(size_t i = 0; i != 4; ++i) {
       // key2 with 8 high bytes masked off
       SIMD_4x32 t = key2;
-      key2 = aes_schedule_round(rcon[2 * i], key2, key1);
+      key2 = aes_schedule_round_rcon(2 * i, key2, key1);
       const auto key2t = SIMD_4x32::alignr8(key2, t);
 
       aes_schedule_mangle(key2t, (i + 3) % 4).store_le(&m_EK[4 * (3 * i + 1)]);
@@ -13979,7 +14607,7 @@ void AES_192::vperm_key_schedule(const uint8_t keyb[], size_t /*unused*/) {
       aes_schedule_mangle(t, (i + 2) % 4).store_le(&m_EK[4 * (3 * i + 2)]);
       aes_schedule_mangle_dec(t, (i + 2) % 4).store_le(&m_DK[4 * (10 - 3 * i)]);
 
-      key2 = aes_schedule_round(rcon[2 * i + 1], t, key2);
+      key2 = aes_schedule_round_rcon(2 * i + 1, t, key2);
 
       if(i == 3) {
          aes_schedule_mangle_last(key2, (i + 1) % 4).store_le(&m_EK[4 * (3 * i + 3)]);
@@ -13994,17 +14622,17 @@ void AES_192::vperm_key_schedule(const uint8_t keyb[], size_t /*unused*/) {
    }
 }
 
-void AES_256::vperm_key_schedule(const uint8_t keyb[], size_t /*unused*/) {
+void BOTAN_FN_ISA_SIMD_4X32 AES_256::vperm_key_schedule(const uint8_t keyb[], size_t /*unused*/) {
    m_EK.resize(15 * 4);
    m_DK.resize(15 * 4);
 
    SIMD_4x32 key1 = SIMD_4x32::load_le(keyb);
    SIMD_4x32 key2 = SIMD_4x32::load_le(keyb + 16);
 
-   shuffle(key1, vperm_sr[2]).store_le(&m_DK[4 * 14]);
+   shiftrows(key1, 2).store_le(&m_DK[4 * 14]);
 
-   key1 = aes_schedule_transform(key1, k_ipt1, k_ipt2);
-   key2 = aes_schedule_transform(key2, k_ipt1, k_ipt2);
+   key1 = aes_schedule_transform_init(key1);
+   key2 = aes_schedule_transform_init(key2);
 
    key1.store_le(&m_EK[0]);
    aes_schedule_mangle(key2, 3).store_le(&m_EK[4]);
@@ -14015,7 +14643,7 @@ void AES_256::vperm_key_schedule(const uint8_t keyb[], size_t /*unused*/) {
 
    for(size_t i = 2; i != 14; i += 2) {
       const SIMD_4x32 k_t = key2;
-      key1 = key2 = aes_schedule_round(rcon[(i / 2) - 1], key2, key1);
+      key1 = key2 = aes_schedule_round_rcon((i / 2) - 1, key2, key1);
 
       aes_schedule_mangle(key2, i % 4).store_le(&m_EK[4 * i]);
       aes_schedule_mangle_dec(key2, (i + 2) % 4).store_le(&m_DK[4 * (14 - i)]);
@@ -14026,7 +14654,7 @@ void AES_256::vperm_key_schedule(const uint8_t keyb[], size_t /*unused*/) {
       aes_schedule_mangle_dec(key2, (i + 1) % 4).store_le(&m_DK[4 * (13 - i)]);
    }
 
-   key2 = aes_schedule_round(rcon[6], key2, key1);
+   key2 = aes_schedule_round_rcon(6, key2, key1);
 
    aes_schedule_mangle_last(key2, 2).store_le(&m_EK[4 * 14]);
    aes_schedule_mangle_last_dec(key2).store_le(&m_DK[0]);
@@ -14134,6 +14762,10 @@ std::vector<uint8_t> ASN1_Object::BER_encode() const {
    DER_Encoder der(output);
    this->encode_into(der);
    return output;
+}
+
+BER_Object::~BER_Object() {
+   secure_scrub_memory(m_value);
 }
 
 /*
@@ -14346,7 +14978,7 @@ std::vector<uint32_t> parse_oid_str(std::string_view oid) {
       std::string elem;
       std::vector<uint32_t> oid_elems;
 
-      for(char c : oid) {
+      for(const char c : oid) {
          if(c == '.') {
             if(elem.empty()) {
                return std::vector<uint32_t>();
@@ -14497,7 +15129,7 @@ void OID::encode_into(DER_Encoder& der) const {
       if(z <= 0x7F) {
          encoding.push_back(static_cast<uint8_t>(z));
       } else {
-         size_t z7 = (high_bit(z) + 7 - 1) / 7;
+         const size_t z7 = (high_bit(z) + 7 - 1) / 7;
 
          for(size_t j = 0; j != z7; ++j) {
             uint8_t zp = static_cast<uint8_t>(z >> (7 * (z7 - j - 1)) & 0x7F);
@@ -14514,9 +15146,10 @@ void OID::encode_into(DER_Encoder& der) const {
    std::vector<uint8_t> encoding;
 
    // We know 40 * root can't overflow because root is between 0 and 2
-   auto first = BOTAN_ASSERT_IS_SOME(checked_add(40 * m_id[0], m_id[1]));
+   auto first = checked_add(40 * m_id[0], m_id[1]);
+   BOTAN_ASSERT_NOMSG(first.has_value());
 
-   append(encoding, first);
+   append(encoding, *first);
 
    for(size_t i = 2; i != m_id.size(); ++i) {
       append(encoding, m_id[i]);
@@ -14528,7 +15161,7 @@ void OID::encode_into(DER_Encoder& der) const {
 * Decode a BER encoded OBJECT IDENTIFIER
 */
 void OID::decode_from(BER_Decoder& decoder) {
-   BER_Object obj = decoder.get_next_object();
+   const BER_Object obj = decoder.get_next_object();
    if(obj.tagging() != (ASN1_Class::Universal | ASN1_Type::ObjectId)) {
       throw BER_Bad_Tag("Error decoding OID, unknown tag", obj.tagging());
    }
@@ -14602,6 +15235,11 @@ void OID::decode_from(BER_Decoder& decoder) {
    }
 
    m_id = parts;
+}
+
+std::ostream& operator<<(std::ostream& out, const OID& oid) {
+   out << oid.to_string();
+   return out;
 }
 
 }  // namespace Botan
@@ -14901,7 +15539,7 @@ namespace {
 ASN1_Type choose_encoding(std::string_view str) {
    auto all_printable = CT::Mask<uint8_t>::set();
 
-   for(char cs : str) {
+   for(const char cs : str) {
       const uint8_t c = static_cast<uint8_t>(cs);
 
       auto is_alpha_lower = CT::Mask<uint8_t>::is_within_range(c, 'a', 'z');
@@ -14964,7 +15602,7 @@ void ASN1_String::encode_into(DER_Encoder& encoder) const {
 * Decode a BER encoded ASN1_String
 */
 void ASN1_String::decode_from(BER_Decoder& source) {
-   BER_Object obj = source.get_next_object();
+   const BER_Object obj = source.get_next_object();
 
    if(!is_asn1_string_type(obj.type())) {
       auto typ = static_cast<uint32_t>(obj.type());
@@ -15007,7 +15645,7 @@ ASN1_Time ASN1_Time::from_seconds_since_epoch(uint64_t time_since_epoch) {
 }
 
 ASN1_Time::ASN1_Time(const std::chrono::system_clock::time_point& time) {
-   calendar_point cal(time);
+   const calendar_point cal(time);
 
    m_year = cal.year();
    m_month = cal.month();
@@ -15041,7 +15679,7 @@ void ASN1_Time::encode_into(DER_Encoder& der) const {
 }
 
 void ASN1_Time::decode_from(BER_Decoder& source) {
-   BER_Object ber_time = source.get_next_object();
+   const BER_Object ber_time = source.get_next_object();
 
    set_to(ASN1::to_string(ber_time), ber_time.type());
 }
@@ -15070,7 +15708,7 @@ std::string ASN1_Time::to_string() const {
    const uint64_t int_repr = year_factor * full_year + mon_factor * m_month + day_factor * m_day +
                              hour_factor * m_hour + min_factor * m_minute + m_second;
 
-   std::string repr = std::to_string(int_repr) + "Z";
+   const std::string repr = std::to_string(int_repr) + "Z";
 
    const size_t desired_size = (m_tag == ASN1_Type::UtcTime) ? 13 : 15;
 
@@ -15469,6 +16107,8 @@ class DataSource_BERObject final : public DataSource {
 
 }  // namespace
 
+BER_Decoder::~BER_Decoder() = default;
+
 /*
 * Check if more objects are there
 */
@@ -15503,6 +16143,16 @@ BER_Decoder& BER_Decoder::discard_remaining() {
    uint8_t buf = 0;
    while(m_source->read_byte(buf) != 0) {}
    return (*this);
+}
+
+std::optional<uint8_t> BER_Decoder::read_next_byte() {
+   BOTAN_ASSERT_NOMSG(m_source != nullptr);
+   uint8_t b = 0;
+   if(m_source->read_byte(b) != 0) {
+      return b;
+   } else {
+      return {};
+   }
 }
 
 const BER_Object& BER_Decoder::peek_next_object() {
@@ -15552,6 +16202,18 @@ BER_Object BER_Decoder::get_next_object() {
    }
 
    return next;
+}
+
+BER_Object BER_Decoder::get_next_value(size_t sizeofT, ASN1_Type type_tag, ASN1_Class class_tag) {
+   const BER_Object obj = get_next_object();
+   obj.assert_is_a(type_tag, class_tag);
+
+   if(obj.length() != sizeofT) {
+      throw BER_Decoding_Error("Size mismatch. Object value size is " + std::to_string(obj.length()) +
+                               "; Output type size is " + std::to_string(sizeofT));
+   }
+
+   return obj;
 }
 
 /*
@@ -15632,6 +16294,10 @@ BER_Decoder::BER_Decoder(const BER_Decoder& other) : m_parent(other.m_parent), m
    std::swap(m_data_src, other.m_data_src);
 }
 
+BER_Decoder::BER_Decoder(BER_Decoder&& other) noexcept = default;
+
+BER_Decoder& BER_Decoder::operator=(BER_Decoder&&) noexcept = default;
+
 /*
 * Request for an object to decode itself
 */
@@ -15644,7 +16310,7 @@ BER_Decoder& BER_Decoder::decode(ASN1_Object& obj, ASN1_Type /*unused*/, ASN1_Cl
 * Decode a BER encoded NULL
 */
 BER_Decoder& BER_Decoder::decode_null() {
-   BER_Object obj = get_next_object();
+   const BER_Object obj = get_next_object();
    obj.assert_is_a(ASN1_Type::Null, ASN1_Class::Universal);
    if(obj.length() > 0) {
       throw BER_Decoding_Error("NULL object had nonzero size");
@@ -15663,7 +16329,7 @@ BER_Decoder& BER_Decoder::decode_octet_string_bigint(BigInt& out) {
 * Decode a BER encoded BOOLEAN
 */
 BER_Decoder& BER_Decoder::decode(bool& out, ASN1_Type type_tag, ASN1_Class class_tag) {
-   BER_Object obj = get_next_object();
+   const BER_Object obj = get_next_object();
    obj.assert_is_a(type_tag, class_tag);
 
    if(obj.length() != 1) {
@@ -15728,7 +16394,7 @@ uint64_t BER_Decoder::decode_constrained_integer(ASN1_Type type_tag, ASN1_Class 
 * Decode a BER encoded INTEGER
 */
 BER_Decoder& BER_Decoder::decode(BigInt& out, ASN1_Type type_tag, ASN1_Class class_tag) {
-   BER_Object obj = get_next_object();
+   const BER_Object obj = get_next_object();
    obj.assert_is_a(type_tag, class_tag);
 
    if(obj.length() == 0) {
@@ -15997,7 +16663,7 @@ DER_Encoder& DER_Encoder::end_cons() {
 * Start a new ASN.1 EXPLICIT encoding
 */
 DER_Encoder& DER_Encoder::start_explicit(uint16_t type_no) {
-   ASN1_Type type_tag = static_cast<ASN1_Type>(type_no);
+   const ASN1_Type type_tag = static_cast<ASN1_Type>(type_no);
 
    // This would confuse DER_Sequence
    if(type_tag == ASN1_Type::Set) {
@@ -16089,7 +16755,7 @@ DER_Encoder& DER_Encoder::encode(const uint8_t bytes[], size_t length, ASN1_Type
 * DER encode a BOOLEAN
 */
 DER_Encoder& DER_Encoder::encode(bool is_true, ASN1_Type type_tag, ASN1_Class class_tag) {
-   uint8_t val = is_true ? 0xFF : 0x00;
+   const uint8_t val = is_true ? 0xFF : 0x00;
    return add_object(type_tag, class_tag, &val, 1);
 }
 
@@ -16193,7 +16859,7 @@ void OID_Map::add_oid(const OID& oid, std::string_view str) {
       }
    }
 
-   lock_guard_type<mutex_type> lock(m_mutex);
+   const lock_guard_type<mutex_type> lock(m_mutex);
 
    auto o2s = m_oid2str.find(oid);
 
@@ -16215,7 +16881,7 @@ void OID_Map::add_str2oid(const OID& oid, std::string_view str) {
       return;
    }
 
-   lock_guard_type<mutex_type> lock(m_mutex);
+   const lock_guard_type<mutex_type> lock(m_mutex);
    if(!m_str2oid.contains(std::string(str))) {
       m_str2oid.insert(std::make_pair(str, oid));
    }
@@ -16226,7 +16892,7 @@ void OID_Map::add_oid2str(const OID& oid, std::string_view str) {
       return;
    }
 
-   lock_guard_type<mutex_type> lock(m_mutex);
+   const lock_guard_type<mutex_type> lock(m_mutex);
    if(!m_oid2str.contains(oid)) {
       m_oid2str.insert(std::make_pair(oid, str));
    }
@@ -16237,7 +16903,7 @@ std::string OID_Map::oid2str(const OID& oid) {
       return std::string(*name);
    }
 
-   lock_guard_type<mutex_type> lock(m_mutex);
+   const lock_guard_type<mutex_type> lock(m_mutex);
 
    auto i = m_oid2str.find(oid);
    if(i != m_oid2str.end()) {
@@ -16252,7 +16918,7 @@ OID OID_Map::str2oid(std::string_view str) {
       return std::move(*oid);
    }
 
-   lock_guard_type<mutex_type> lock(m_mutex);
+   const lock_guard_type<mutex_type> lock(m_mutex);
    auto i = m_str2oid.find(std::string(str));
    if(i != m_str2oid.end()) {
       return i->second;
@@ -16295,7 +16961,7 @@ namespace Botan {
 
 //static
 PSS_Params PSS_Params::from_padding_name(std::string_view padding_name) {
-   SCAN_Name scanner(padding_name);
+   const SCAN_Name scanner(padding_name);
 
    if((scanner.algo_name() != "PSS" && scanner.algo_name() != "PSS_Raw") || scanner.arg_count() != 3) {
       throw Invalid_Argument(fmt("PSS_Params::from_padding_name unexpected param '{}'", padding_name));
@@ -16357,7 +17023,7 @@ void PSS_Params::decode_from(BER_Decoder& from) {
 
 }  // namespace Botan
 /*
-* This file was automatically generated by ./src/scripts/dev_tools/gen_oids.py on 2025-06-04
+* This file was automatically generated by ./src/scripts/dev_tools/gen_oids.py on 2026-03-04
 *
 * All manual edits to this file will be lost. Edit the script then regenerate this source file.
 *
@@ -16392,7 +17058,7 @@ std::optional<OID> if_match(std::string_view req, std::string_view actual, std::
 uint32_t hash_oid_name(std::string_view s) {
    uint64_t hash = 0x8188B31879A4879A;
 
-   for(char c : s) {
+   for(const char c : s) {
       hash *= 251;
       hash += c;
    }
@@ -16535,6 +17201,8 @@ std::optional<std::string_view> OID_Map::lookup_static_oid(const OID& oid) {
          return if_match(oid, {1, 2, 410, 200004, 1, 100, 4, 5}, "ECKCDSA/SHA-256");
       case 0x2AC3B:
          return if_match(oid, {2, 5, 29, 32, 0}, "X509v3.AnyPolicy");
+      case 0x2B000:
+         return if_match(oid, {2, 5, 29, 37, 0}, "X509v3.AnyExtendedKeyUsage");
       case 0x2B5C9:
          return if_match(oid, {1, 2, 840, 10045, 2, 1}, "ECDSA");
       case 0x2B74B:
@@ -16577,6 +17245,18 @@ std::optional<std::string_view> OID_Map::lookup_static_oid(const OID& oid) {
          return if_match(oid, {1, 2, 643, 3, 131, 1, 1}, "GOST.INN");
       case 0x635AE:
          return if_match(oid, {1, 2, 250, 1, 223, 101, 256, 1}, "frp256v1");
+      case 0x6A784:
+         return if_match(oid, {1, 2, 840, 113549, 1, 12, 10, 1, 1}, "PKCS12.KeyBag");
+      case 0x6A785:
+         return if_match(oid, {1, 2, 840, 113549, 1, 12, 10, 1, 2}, "PKCS12.PKCS8ShroudedKeyBag");
+      case 0x6A786:
+         return if_match(oid, {1, 2, 840, 113549, 1, 12, 10, 1, 3}, "PKCS12.CertBag");
+      case 0x6A787:
+         return if_match(oid, {1, 2, 840, 113549, 1, 12, 10, 1, 4}, "PKCS12.CRLBag");
+      case 0x6A788:
+         return if_match(oid, {1, 2, 840, 113549, 1, 12, 10, 1, 5}, "PKCS12.SecretBag");
+      case 0x6A789:
+         return if_match(oid, {1, 2, 840, 113549, 1, 12, 10, 1, 6}, "PKCS12.SafeContentsBag");
       case 0x6EB86:
          return if_match(oid, {1, 3, 6, 1, 4, 1, 25258, 1, 6, 1}, "GOST-34.10-2012-256/SHA-256");
       case 0x6EC47:
@@ -16667,6 +17347,12 @@ std::optional<std::string_view> OID_Map::lookup_static_oid(const OID& oid) {
          return if_match(oid, {1, 2, 643, 7, 1, 1, 3, 2}, "GOST-34.10-2012-256/Streebog-256");
       case 0x72CA5:
          return if_match(oid, {1, 2, 643, 7, 1, 1, 3, 3}, "GOST-34.10-2012-512/Streebog-512");
+      case 0x7C7C7:
+         return if_match(oid, {1, 2, 840, 113549, 1, 9, 22, 1}, "PKCS9.X509Certificate");
+      case 0x7C7C8:
+         return if_match(oid, {1, 2, 840, 113549, 1, 9, 22, 2}, "PKCS9.SDSICertificate");
+      case 0x7C888:
+         return if_match(oid, {1, 2, 840, 113549, 1, 9, 23, 1}, "PKCS9.X509CRL");
       case 0x7E10F:
          return if_match(oid, {2, 5, 4, 3}, "X520.CommonName");
       case 0x7E110:
@@ -16929,6 +17615,10 @@ std::optional<std::string_view> OID_Map::lookup_static_oid(const OID& oid) {
          return if_match(oid, {1, 3, 6, 1, 5, 5, 7, 48, 1}, "PKIX.OCSP");
       case 0x96B0F:
          return if_match(oid, {1, 3, 6, 1, 5, 5, 7, 48, 2}, "PKIX.CertificateAuthorityIssuers");
+      case 0x96C77:
+         return if_match(oid, {1, 2, 840, 113549, 1, 12, 1, 3}, "PBE-SHA1-3DES");
+      case 0x96C78:
+         return if_match(oid, {1, 2, 840, 113549, 1, 12, 1, 4}, "PBE-SHA1-2DES");
       case 0x9A008:
          return if_match(oid, {1, 3, 36, 3, 3, 2, 8, 1, 1, 1}, "brainpool160r1");
       case 0x9A00A:
@@ -17015,6 +17705,10 @@ std::optional<std::string_view> OID_Map::lookup_static_oid(const OID& oid) {
          return if_match(oid, {1, 2, 840, 113549, 1, 5, 12}, "PKCS5.PBKDF2");
       case 0xAFC99:
          return if_match(oid, {1, 2, 840, 113549, 1, 5, 13}, "PBE-PKCS5v20");
+      case 0xAFE0F:
+         return if_match(oid, {1, 2, 840, 113549, 1, 7, 1}, "PKCS7.Data");
+      case 0xAFE14:
+         return if_match(oid, {1, 2, 840, 113549, 1, 7, 6}, "PKCS7.EncryptedData");
       case 0xAFF91:
          return if_match(oid, {1, 2, 840, 113549, 1, 9, 1}, "PKCS9.EmailAddress");
       case 0xAFF92:
@@ -17027,6 +17721,10 @@ std::optional<std::string_view> OID_Map::lookup_static_oid(const OID& oid) {
          return if_match(oid, {1, 2, 840, 113549, 1, 9, 7}, "PKCS9.ChallengePassword");
       case 0xAFF9E:
          return if_match(oid, {1, 2, 840, 113549, 1, 9, 14}, "PKCS9.ExtensionRequest");
+      case 0xAFFA4:
+         return if_match(oid, {1, 2, 840, 113549, 1, 9, 20}, "PKCS9.FriendlyName");
+      case 0xAFFA5:
+         return if_match(oid, {1, 2, 840, 113549, 1, 9, 21}, "PKCS9.LocalKeyId");
       case 0xC0226:
          return if_match(oid, {1, 3, 6, 1, 4, 1, 11591, 4, 11}, "Scrypt");
       case 0xC0A67:
@@ -17101,6 +17799,8 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "SphincsPlus-sha2-128s-r3.1", {1, 3, 6, 1, 4, 1, 25258, 1, 12, 2, 1});
       case 0x0BE23:
          return if_match(req, "ECGDSA", {1, 3, 36, 3, 3, 2, 5, 2, 1});
+      case 0x0C109:
+         return if_match(req, "PKCS9.FriendlyName", {1, 2, 840, 113549, 1, 9, 20});
       case 0x0D012:
          return if_match(req, "SphincsPlus-shake-128s-r3.1", {1, 3, 6, 1, 4, 1, 25258, 1, 12, 1, 1});
       case 0x0DCE9:
@@ -17135,6 +17835,8 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "Compression.Zlib", {1, 2, 840, 113549, 1, 9, 16, 3, 8});
       case 0x1579E:
          return if_match(req, "Streebog-512", {1, 2, 643, 7, 1, 1, 2, 3});
+      case 0x1701A:
+         return if_match(req, "X509v3.AnyExtendedKeyUsage", {2, 5, 29, 37, 0});
       case 0x175EF:
          return if_match(req, "Kyber-1024-90s-r3", {1, 3, 6, 1, 4, 1, 25258, 1, 11, 3});
       case 0x17709:
@@ -17171,6 +17873,8 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "X520.Initials", {2, 5, 4, 43});
       case 0x271AC:
          return if_match(req, "PKIX.AutonomousSysIds", {1, 3, 6, 1, 5, 5, 7, 1, 8});
+      case 0x2808B:
+         return if_match(req, "PKCS7.Data", {1, 2, 840, 113549, 1, 7, 1});
       case 0x281B8:
          return if_match(req, "SphincsPlus-haraka-128s-r3.1", {1, 3, 6, 1, 4, 1, 25258, 1, 12, 3, 1});
       case 0x29999:
@@ -17191,6 +17895,10 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "RSA/PKCS1v15(RIPEMD-160)", {1, 3, 36, 3, 3, 1, 2});
       case 0x2EFBA:
          return if_match(req, "Kyber-512-r3", {1, 3, 6, 1, 4, 1, 25258, 1, 7, 1});
+      case 0x2F0AD:
+         return if_match(req, "PKCS7.EncryptedData", {1, 2, 840, 113549, 1, 7, 6});
+      case 0x2F219:
+         return if_match(req, "PBE-SHA1-2DES", {1, 2, 840, 113549, 1, 12, 1, 4});
       case 0x3133E:
          return if_match(req, "SLH-DSA-SHA2-128f", {2, 16, 840, 1, 101, 3, 4, 3, 21});
       case 0x3134B:
@@ -17205,6 +17913,8 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "secp384r1", {1, 3, 132, 0, 34});
       case 0x32899:
          return if_match(req, "TripleDES/CBC", {1, 2, 840, 113549, 3, 7});
+      case 0x33D04:
+         return if_match(req, "PKCS12.SecretBag", {1, 2, 840, 113549, 1, 12, 10, 1, 5});
       case 0x3615D:
          return if_match(req, "FrodoKEM-976-SHAKE", {1, 3, 6, 1, 4, 1, 25258, 1, 14, 2});
       case 0x361B8:
@@ -17347,6 +18057,8 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "PKIX.OCSP.NoCheck", {1, 3, 6, 1, 5, 5, 7, 48, 1, 5});
       case 0x59717:
          return if_match(req, "X509v3.SubjectKeyIdentifier", {2, 5, 29, 14});
+      case 0x5A1E1:
+         return if_match(req, "PKCS12.KeyBag", {1, 2, 840, 113549, 1, 12, 10, 1, 1});
       case 0x5A570:
          return if_match(req, "X520.CommonName", {2, 5, 4, 3});
       case 0x5A990:
@@ -17365,6 +18077,8 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "SphincsPlus-shake-256s-r3.1", {1, 3, 6, 1, 4, 1, 25258, 1, 12, 1, 5});
       case 0x5C10E:
          return if_match(req, "DSA/SHA-384", {2, 16, 840, 1, 101, 3, 4, 3, 3});
+      case 0x5CFE5:
+         return if_match(req, "PKCS9.X509Certificate", {1, 2, 840, 113549, 1, 9, 22, 1});
       case 0x5D1CF:
          return if_match(req, "X520.SerialNumber", {2, 5, 4, 5});
       case 0x5D375:
@@ -17421,10 +18135,14 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "Dilithium-8x7-r3", {1, 3, 6, 1, 4, 1, 25258, 1, 9, 3});
       case 0x6F0C2:
          return if_match(req, "RSA/PKCS1v15(SHA-224)", {1, 2, 840, 113549, 1, 1, 14});
+      case 0x6F9F8:
+         return if_match(req, "PKCS12.SafeContentsBag", {1, 2, 840, 113549, 1, 12, 10, 1, 6});
       case 0x6FB26:
          return if_match(req, "PKIX.AuthorityInformationAccess", {1, 3, 6, 1, 5, 5, 7, 1, 1});
       case 0x70BB6:
          return if_match(req, "brainpool384r1", {1, 3, 36, 3, 3, 2, 8, 1, 1, 11});
+      case 0x70EA6:
+         return if_match(req, "PKCS12.PKCS8ShroudedKeyBag", {1, 2, 840, 113549, 1, 12, 10, 1, 2});
       case 0x71EB3:
          return if_match(req, "SphincsPlus-haraka-128f-r3.1", {1, 3, 6, 1, 4, 1, 25258, 1, 12, 3, 2});
       case 0x7382C:
@@ -17445,6 +18163,8 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "ClassicMcEliece_348864f", {1, 3, 6, 1, 4, 1, 22554, 5, 1, 2});
       case 0x76784:
          return if_match(req, "SHA-3(384)", {2, 16, 840, 1, 101, 3, 4, 2, 9});
+      case 0x768FD:
+         return if_match(req, "PKCS9.LocalKeyId", {1, 2, 840, 113549, 1, 9, 21});
       case 0x76A19:
          return if_match(req, "brainpool512r1", {1, 3, 36, 3, 3, 2, 8, 1, 1, 13});
       case 0x77254:
@@ -17495,6 +18215,8 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "AES-256/CCM", {2, 16, 840, 1, 101, 3, 4, 1, 47});
       case 0x811F7:
          return if_match(req, "HMAC(SHA-256)", {1, 2, 840, 113549, 2, 9});
+      case 0x82434:
+         return if_match(req, "PKCS9.X509CRL", {1, 2, 840, 113549, 1, 9, 23, 1});
       case 0x82B47:
          return if_match(req, "Threefish-512/CBC", {1, 3, 6, 1, 4, 1, 25258, 3, 2});
       case 0x83EA7:
@@ -17611,6 +18333,8 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "AES-192/GCM", {2, 16, 840, 1, 101, 3, 4, 1, 26});
       case 0x9F9C5:
          return if_match(req, "ClassicMcEliece_6688128pcf", {1, 3, 6, 1, 4, 1, 25258, 1, 18, 2});
+      case 0xA0805:
+         return if_match(req, "PKCS9.SDSICertificate", {1, 2, 840, 113549, 1, 9, 22, 2});
       case 0xA2B5B:
          return if_match(req, "X509v3.CRLNumber", {2, 5, 29, 20});
       case 0xA3005:
@@ -17629,6 +18353,8 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "Camellia-128/SIV", {1, 3, 6, 1, 4, 1, 25258, 3, 4, 6});
       case 0xA6C61:
          return if_match(req, "SM4/GCM", {1, 2, 156, 10197, 1, 104, 8});
+      case 0xA8439:
+         return if_match(req, "PKCS12.CertBag", {1, 2, 840, 113549, 1, 12, 10, 1, 3});
       case 0xA9061:
          return if_match(req, "Kyber-768-90s-r3", {1, 3, 6, 1, 4, 1, 25258, 1, 11, 2});
       case 0xAA995:
@@ -17643,6 +18369,8 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "Streebog-256", {1, 2, 643, 7, 1, 1, 2, 2});
       case 0xAC3DD:
          return if_match(req, "Certificate Comment", {2, 16, 840, 1, 113730, 1, 13});
+      case 0xAC511:
+         return if_match(req, "PBE-SHA1-3DES", {1, 2, 840, 113549, 1, 12, 1, 3});
       case 0xAE6FE:
          return if_match(req, "PKIX.ClientAuth", {1, 3, 6, 1, 5, 5, 7, 3, 2});
       case 0xAE8D3:
@@ -17689,6 +18417,8 @@ std::optional<OID> OID_Map::lookup_static_oid_name(std::string_view req) {
          return if_match(req, "gost_512B", {1, 2, 643, 7, 1, 2, 1, 2, 2});
       case 0xBA1D8:
          return if_match(req, "X520.StreetAddress", {2, 5, 4, 9});
+      case 0xBCB45:
+         return if_match(req, "PKCS12.CRLBag", {1, 2, 840, 113549, 1, 12, 10, 1, 4});
       case 0xBCC82:
          return if_match(req, "x962_p239v1", {1, 2, 840, 10045, 3, 1, 4});
       case 0xBCC83:
@@ -18071,7 +18801,7 @@ uint8_t Base64::lookup_binary_value(char input) noexcept {
    // This is the offset added to x to get the value
    const uint64_t val_v = 0xbfb904 ^ (0xFF000000 - (x << 24));
 
-   uint8_t z = x + static_cast<uint8_t>(val_v >> (8 * index_of_first_set_byte(v_mask)));
+   const uint8_t z = x + static_cast<uint8_t>(val_v >> (8 * index_of_first_set_byte(v_mask)));
 
    // Valid base64 special characters, and some whitespace chars
    constexpr uint64_t specials_i = make_uint64(0, '+', '/', '=', ' ', '\n', '\t', '\r');
@@ -18202,10 +18932,10 @@ std::string BigInt::to_dec_string() const {
    for(size_t i = 0; i != digit_blocks; ++i) {
       word remainder = digit_groups[i];
       for(size_t j = 0; j != radix_digits; ++j) {
-         // Compiler should convert div/mod by 10 into mul by magic constant
-         const word digit = remainder % 10;
-         remainder /= 10;
+         const word new_remainder = divide_10(remainder);
+         const word digit = remainder - new_remainder * 10;
          digits[radix_digits * i + j] = static_cast<uint8_t>(digit);
+         remainder = new_remainder;
       }
    }
 
@@ -18255,6 +18985,65 @@ std::string BigInt::to_hex_string() const {
    return hrep;
 }
 
+//static
+BigInt BigInt::from_radix_digits(std::string_view digits, size_t radix) {
+   if(radix == 16) {
+      secure_vector<uint8_t> binary;
+
+      if(digits.size() % 2 == 1) {
+         // Handle lack of leading 0
+         const char buf0_with_leading_0[2] = {'0', digits[0]};
+
+         binary = hex_decode_locked(buf0_with_leading_0, 2);
+
+         if(digits.size() > 1) {
+            binary += hex_decode_locked(&digits[1], digits.size() - 1, false);
+         }
+      } else {
+         binary = hex_decode_locked(digits, false);
+      }
+
+      return BigInt::from_bytes(binary);
+   } else if(radix == 10) {
+      // Use the largest power of 10 that fits in a word, accumulating
+      // groups of digits into word-sized chunks to minimize the number
+      // of multiprecision multiplications.
+      constexpr word conversion_radix = decimal_conversion_radix();
+      constexpr size_t radix_digits = decimal_conversion_radix_digits();
+
+      BigInt r;
+
+      // Handle the initial partial block (if digit count is not a multiple of radix_digits)
+      const size_t partial_block = digits.size() % radix_digits;
+
+      if(partial_block > 0) {
+         word acc = 0;
+         for(size_t i = 0; i < partial_block; ++i) {
+            const char c = digits[i];
+            BOTAN_ARG_CHECK(c >= '0' && c <= '9', "Invalid decimal character");
+            acc = acc * 10 + static_cast<word>(c - '0');
+         }
+         r += acc;
+      }
+
+      // Process full blocks of radix_digits
+      for(size_t i = partial_block; i != digits.size(); i += radix_digits) {
+         word acc = 0;
+         for(size_t j = 0; j < radix_digits; ++j) {
+            const char c = digits[i + j];
+            BOTAN_ARG_CHECK(c >= '0' && c <= '9', "Invalid decimal character");
+            acc = acc * 10 + static_cast<word>(c - '0');
+         }
+         r *= conversion_radix;
+         r += acc;
+      }
+
+      return r;
+   } else {
+      throw Invalid_Argument("BigInt::from_radix_digits unknown radix");
+   }
+}
+
 /*
 * Encode two BigInt, with leading 0s if needed, and concatenate
 */
@@ -18286,41 +19075,11 @@ BigInt BigInt::decode(const uint8_t buf[], size_t length, Base base) {
    if(base == Binary) {
       return BigInt::from_bytes(std::span{buf, length});
    } else if(base == Hexadecimal) {
-      BigInt r;
-      secure_vector<uint8_t> binary;
-
-      if(length % 2 == 1) {
-         // Handle lack of leading 0
-         const char buf0_with_leading_0[2] = {'0', static_cast<char>(buf[0])};
-
-         binary = hex_decode_locked(buf0_with_leading_0, 2);
-
-         if(length > 1) {
-            binary += hex_decode_locked(cast_uint8_ptr_to_char(&buf[1]), length - 1, false);
-         }
-      } else {
-         binary = hex_decode_locked(cast_uint8_ptr_to_char(buf), length, false);
-      }
-
-      r.assign_from_bytes(binary);
-      return r;
+      const std::string_view sv{cast_uint8_ptr_to_char(buf), length};
+      return BigInt::from_radix_digits(sv, 16);
    } else if(base == Decimal) {
-      BigInt r;
-      // This could be made faster using the same trick as to_dec_string
-      for(size_t i = 0; i != length; ++i) {
-         const char c = buf[i];
-
-         if(c < '0' || c > '9') {
-            throw Invalid_Argument("BigInt::decode: invalid decimal char");
-         }
-
-         const uint8_t x = c - '0';
-         BOTAN_ASSERT_NOMSG(x < 10);
-
-         r *= 10;
-         r += x;
-      }
-      return r;
+      const std::string_view sv{cast_uint8_ptr_to_char(buf), length};
+      return BigInt::from_radix_digits(sv, 10);
    } else {
       throw Invalid_Argument("Unknown BigInt decoding method");
    }
@@ -18333,6 +19092,7 @@ BigInt BigInt::decode(const uint8_t buf[], size_t length, Base base) {
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
+
 
 #include <istream>
 #include <ostream>
@@ -18393,7 +19153,7 @@ BigInt& BigInt::add(const word y[], size_t y_words, Sign y_sign) {
    grow_to(std::max(x_sw, y_words) + 1);
 
    if(sign() == y_sign) {
-      word carry = bigint_add2(mutable_data(), size() - 1, y, y_words);
+      const word carry = bigint_add2(mutable_data(), size() - 1, y, y_words);
       mutable_data()[size() - 1] += carry;
    } else {
       const int32_t relative_size = bigint_cmp(_data(), x_sw, y, y_words);
@@ -18488,7 +19248,7 @@ BigInt& BigInt::mod_sub(const BigInt& s, const BigInt& mod, secure_vector<word>&
    // Conditionally add back the modulus
    bigint_cnd_add(borrow, ws.data(), mod._data(), mod_sw);
 
-   copy_mem(mutable_data(), ws.data(), mod_sw);
+   unchecked_copy_memory(mutable_data(), ws.data(), mod_sw);
 
    return (*this);
 }
@@ -18604,7 +19364,7 @@ word BigInt::operator%=(word mod) {
    if(is_power_of_2(mod)) {
       remainder = (word_at(0) & (mod - 1));
    } else {
-      divide_precomp redc_mod(mod);
+      const divide_precomp redc_mod(mod);
       const size_t sw = sig_words();
       for(size_t i = sw; i > 0; --i) {
          remainder = redc_mod.vartime_mod_2to1(remainder, word_at(i - 1));
@@ -18668,7 +19428,7 @@ BigInt BigInt::add2(const BigInt& x, const word y[], size_t y_size, BigInt::Sign
    BigInt z = BigInt::with_capacity(std::max(x_sw, y_size) + 1);
 
    if(x.sign() == y_sign) {
-      word carry = bigint_add3(z.mutable_data(), x._data(), x_sw, y, y_size);
+      const word carry = bigint_add3(z.mutable_data(), x._data(), x_sw, y, y_size);
       z.mutable_data()[std::max(x_sw, y_size)] += carry;
       z.set_sign(x.sign());
    } else {
@@ -18814,7 +19574,7 @@ word operator%(const BigInt& n, word mod) {
    if(n.is_positive() && is_power_of_2(mod)) {
       remainder = (n.word_at(0) & (mod - 1));
    } else {
-      divide_precomp redc_mod(mod);
+      const divide_precomp redc_mod(mod);
       const size_t sw = n.sig_words();
       for(size_t i = sw; i > 0; --i) {
          remainder = redc_mod.vartime_mod_2to1(remainder, n.word_at(i - 1));
@@ -18988,35 +19748,30 @@ BigInt BigInt::with_capacity(size_t size) {
    return bn;
 }
 
-/*
-* Construct a BigInt from a string
-*/
-BigInt::BigInt(std::string_view str) {
-   Base base = Decimal;
-   size_t markers = 0;
+BigInt BigInt::from_string(std::string_view str) {
+   size_t prefix_bytes = 0;
    bool negative = false;
+   size_t radix = 10;
 
    if(!str.empty() && str[0] == '-') {
-      markers += 1;
+      prefix_bytes += 1;
       negative = true;
    }
 
-   if(str.length() > markers + 2 && str[markers] == '0' && str[markers + 1] == 'x') {
-      markers += 2;
-      base = Hexadecimal;
+   if(str.length() > prefix_bytes + 2 && str[prefix_bytes] == '0' && str[prefix_bytes + 1] == 'x') {
+      prefix_bytes += 2;
+      radix = 16;
    }
 
-   *this = decode(as_span_of_bytes(str).subspan(markers), base);
+   BigInt r = BigInt::from_radix_digits(str.substr(prefix_bytes), radix);
 
    if(negative) {
-      set_sign(Negative);
+      r.set_sign(Negative);
    } else {
-      set_sign(Positive);
+      r.set_sign(Positive);
    }
-}
 
-BigInt BigInt::from_string(std::string_view str) {
-   return BigInt(str);
+   return r;
 }
 
 BigInt BigInt::from_bytes(std::span<const uint8_t> input) {
@@ -19097,7 +19852,7 @@ bool BigInt::is_equal(const BigInt& other) const {
       return false;
    }
 
-   return bigint_ct_is_eq(this->_data(), this->sig_words(), other._data(), other.sig_words()).as_bool();
+   return bigint_ct_is_eq(this->_data(), this->size(), other._data(), other.size()).as_bool();
 }
 
 bool BigInt::is_less_than(const BigInt& other) const {
@@ -19110,10 +19865,10 @@ bool BigInt::is_less_than(const BigInt& other) const {
    }
 
    if(other.is_negative() && this->is_negative()) {
-      return bigint_ct_is_lt(other._data(), other.sig_words(), this->_data(), this->sig_words()).as_bool();
+      return bigint_ct_is_lt(other._data(), other.size(), this->_data(), this->size()).as_bool();
    }
 
-   return bigint_ct_is_lt(this->_data(), this->sig_words(), other._data(), other.sig_words()).as_bool();
+   return bigint_ct_is_lt(this->_data(), this->size(), other._data(), other.size()).as_bool();
 }
 
 void BigInt::encode_words(word out[], size_t size) const {
@@ -19285,7 +20040,7 @@ size_t BigInt::reduce_below(const BigInt& p, secure_vector<word>& ws) {
    size_t reductions = 0;
 
    for(;;) {
-      word borrow = bigint_sub3(ws.data(), _data(), p_words + 1, p._data(), p_words);
+      const word borrow = bigint_sub3(ws.data(), _data(), p_words + 1, p._data(), p_words);
       if(borrow > 0) {
          break;
       }
@@ -19313,7 +20068,7 @@ void BigInt::ct_reduce_below(const BigInt& mod, secure_vector<word>& ws, size_t 
    clear_mem(ws.data(), sz);
 
    for(size_t i = 0; i != bound; ++i) {
-      word borrow = bigint_sub3(ws.data(), _data(), sz, mod._data(), mod_words);
+      const word borrow = bigint_sub3(ws.data(), _data(), sz, mod._data(), mod_words);
 
       CT::Mask<word>::is_zero(borrow).select_n(mutable_data(), ws.data(), _data(), sz);
    }
@@ -19758,7 +20513,7 @@ BigInt vartime_divide_pow2k(size_t k, const BigInt& y_arg) {
    const word y_t1 = y.word_at(t - 1);
    BOTAN_DEBUG_ASSERT((y_t0 >> (WB - 1)) == 1);
 
-   divide_precomp div_y_t0(y_t0);
+   const divide_precomp div_y_t0(y_t0);
 
    for(size_t i = n; i != t; --i) {
       const word x_i0 = r.word_at(i);
@@ -19861,7 +20616,7 @@ void vartime_divide(const BigInt& x, const BigInt& y_arg, BigInt& q_out, BigInt&
    const word y_t1 = y.word_at(t - 1);
    BOTAN_DEBUG_ASSERT((y_t0 >> (WB - 1)) == 1);
 
-   divide_precomp div_y_t0(y_t0);
+   const divide_precomp div_y_t0(y_t0);
 
    for(size_t i = n; i != t; --i) {
       const word x_i0 = r.word_at(i);
@@ -20092,7 +20847,7 @@ void BLAKE2b::key_schedule(std::span<const uint8_t> key) {
    m_padded_key_buffer.resize(m_buffer.size());
 
    if(m_padded_key_buffer.size() > m_key_size) {
-      size_t padding = m_padded_key_buffer.size() - m_key_size;
+      const size_t padding = m_padded_key_buffer.size() - m_key_size;
       clear_mem(m_padded_key_buffer.data() + m_key_size, padding);
    }
 
@@ -20269,7 +21024,6 @@ BLAKE2s::~BLAKE2s() {
 */
 
 
-#include <utility>
 
 #if defined(BOTAN_HAS_AES)
 #endif
@@ -21190,7 +21944,7 @@ size_t ChaCha_RNG::security_level() const {
 namespace Botan {
 
 //static
-void ChaCha::chacha_simd32_x4(uint8_t output[64 * 4], uint32_t state[16], size_t rounds) {
+void BOTAN_FN_ISA_SIMD_4X32 ChaCha::chacha_simd32_x4(uint8_t output[64 * 4], uint32_t state[16], size_t rounds) {
    BOTAN_ASSERT(rounds % 2 == 0, "Valid rounds");
    const SIMD_4x32 CTR0 = SIMD_4x32(0, 1, 2, 3);
 
@@ -21736,6 +22490,9 @@ std::optional<CPUFeature> CPUFeature::from_string(std::string_view tok) {
 
 
 
+#if defined(BOTAN_HAS_CTR_BE_AVX2) || defined(BOTAN_HAS_CTR_BE_SIMD32)
+#endif
+
 namespace Botan {
 
 CTR_BE::CTR_BE(std::unique_ptr<BlockCipher> cipher) :
@@ -21811,6 +22568,8 @@ void CTR_BE::cipher_bytes(const uint8_t in[], uint8_t out[], size_t length) {
    const uint8_t* pad_bits = m_pad.data();
    const size_t pad_size = m_pad.size();
 
+   /* Consume any already computed keystream in m_pad */
+
    if(m_pad_pos > 0) {
       const size_t avail = pad_size - m_pad_pos;
       const size_t take = std::min(length, avail);
@@ -21827,6 +22586,28 @@ void CTR_BE::cipher_bytes(const uint8_t in[], uint8_t out[], size_t length) {
       }
    }
 
+   /* Bulk processing */
+
+   [[maybe_unused]] const bool can_use_bs16_ctr4_fastpath = m_block_size == 16 && m_ctr_size == 4 && pad_size % 64 == 0;
+
+#if defined(BOTAN_HAS_CTR_BE_AVX2)
+   if(length >= pad_size && can_use_bs16_ctr4_fastpath && CPUID::has(CPUID::Feature::AVX2)) {
+      const size_t consumed = ctr_proc_bs16_ctr4_avx2(in, out, length);
+      in += consumed;
+      out += consumed;
+      length -= consumed;
+   }
+#endif
+
+#if defined(BOTAN_HAS_CTR_BE_SIMD32)
+   if(length >= pad_size && can_use_bs16_ctr4_fastpath && CPUID::has(CPUID::Feature::SIMD_4X32)) {
+      const size_t consumed = ctr_proc_bs16_ctr4_simd32(in, out, length);
+      in += consumed;
+      out += consumed;
+      length -= consumed;
+   }
+#endif
+
    while(length >= pad_size) {
       xor_buf(out, in, pad_bits, pad_size);
       length -= pad_size;
@@ -21837,8 +22618,11 @@ void CTR_BE::cipher_bytes(const uint8_t in[], uint8_t out[], size_t length) {
       m_cipher->encrypt_n(m_counter.data(), m_pad.data(), m_ctr_blocks);
    }
 
-   xor_buf(out, in, pad_bits, length);
-   m_pad_pos += length;
+   /* Now if length > 0 then we have some remaining text, and m_pad is full - consume as required */
+   if(length > 0) {
+      xor_buf(out, in, pad_bits, length);
+      m_pad_pos = length;
+   }
 }
 
 void CTR_BE::generate_keystream(uint8_t out[], size_t length) {
@@ -22058,9 +22842,12 @@ void reduce_after_mul(std::span<uint64_t, WORDS_448> out, std::span<const uint64
    r[0] = word_add(in[0], in[7], &carry);
 
    // Line 5-7
-   for(size_t i = 1; i < 7; ++i) {
-      r[i] = word_add(in[i], in[i + 7], &carry);
-   }
+   r[1] = word_add(in[1], in[1 + 7], &carry);
+   r[2] = word_add(in[2], in[2 + 7], &carry);
+   r[3] = word_add(in[3], in[3 + 7], &carry);
+   r[4] = word_add(in[4], in[4 + 7], &carry);
+   r[5] = word_add(in[5], in[5 + 7], &carry);
+   r[6] = word_add(in[6], in[6 + 7], &carry);
    r[7] = carry;
    s[0] = r[0];
    s[1] = r[1];
@@ -22069,29 +22856,51 @@ void reduce_after_mul(std::span<uint64_t, WORDS_448> out, std::span<const uint64
    carry = 0;
    s[3] = word_add(r[3], in[10] & 0xFFFFFFFF00000000, &carry);
    // Line 11-13
-   for(size_t i = 4; i < 7; ++i) {
-      s[i] = word_add(r[i], in[i + 7], &carry);
-   }
+   s[4] = word_add(r[4], in[4 + 7], &carry);
+   s[5] = word_add(r[5], in[5 + 7], &carry);
+   s[6] = word_add(r[6], in[6 + 7], &carry);
    s[7] = r[7] + carry;
 
    // Line 15-17
-   for(size_t i = 0; i < 3; ++i) {
-      t_0[i] = (in[i + 11] << 32) | (in[i + 10] >> 32);
-   }
+   t_0[0] = (in[0 + 11] << 32) | (in[0 + 10] >> 32);
+   t_0[1] = (in[1 + 11] << 32) | (in[1 + 10] >> 32);
+   t_0[2] = (in[2 + 11] << 32) | (in[2 + 10] >> 32);
    // Line 18
    t_0[3] = (in[7] << 32) | (in[13] >> 32);
    // Line 19-21
-   for(size_t i = 4; i < 7; ++i) {
-      t_0[i] = (in[i + 4] << 32) | (in[i + 3] >> 32);
-   }
+   t_0[4] = (in[4 + 4] << 32) | (in[4 + 3] >> 32);
+   t_0[5] = (in[5 + 4] << 32) | (in[5 + 3] >> 32);
+   t_0[6] = (in[6 + 4] << 32) | (in[6 + 3] >> 32);
    carry = 0;
    // Line 23-25
-   for(size_t i = 0; i < 7; ++i) {
-      h_1[i] = word_add(s[i], t_0[i], &carry);
-   }
+   h_1[0] = word_add(s[0], t_0[0], &carry);
+   h_1[1] = word_add(s[1], t_0[1], &carry);
+   h_1[2] = word_add(s[2], t_0[2], &carry);
+   h_1[3] = word_add(s[3], t_0[3], &carry);
+   h_1[4] = word_add(s[4], t_0[4], &carry);
+   h_1[5] = word_add(s[5], t_0[5], &carry);
+   h_1[6] = word_add(s[6], t_0[6], &carry);
    h_1[7] = s[7] + carry;
 
    reduce_after_add(out, h_1);
+}
+
+// Multiply by the Curve448 constant a24 = (a-2)/4 = 39081.
+// Uses a 7-word × 1-word multiply (7 muls vs 49 for full comba_mul<7>),
+// and the result fits in 8 words so only needs reduce_after_add.
+void gf_mul_a24(std::span<uint64_t, WORDS_448> out, std::span<const uint64_t, WORDS_448> a) {
+   constexpr uint64_t A24 = 39081;
+   std::array<uint64_t, 8> ws;  // NOLINT(*-member-init)
+   uint64_t carry = 0;
+   ws[0] = word_madd2(a[0], A24, &carry);
+   ws[1] = word_madd2(a[1], A24, &carry);
+   ws[2] = word_madd2(a[2], A24, &carry);
+   ws[3] = word_madd2(a[3], A24, &carry);
+   ws[4] = word_madd2(a[4], A24, &carry);
+   ws[5] = word_madd2(a[5], A24, &carry);
+   ws[6] = word_madd2(a[6], A24, &carry);
+   ws[7] = carry;
+   reduce_after_add(out, ws);
 }
 
 void gf_mul(std::span<uint64_t, WORDS_448> out,
@@ -22114,10 +22923,14 @@ void gf_add(std::span<uint64_t, WORDS_448> out,
    std::array<uint64_t, WORDS_448 + 1> ws;  // NOLINT(*-member-init)
 
    uint64_t carry = 0;
-   for(size_t i = 0; i < WORDS_448; ++i) {
-      ws[i] = word_add(a[i], b[i], &carry);
-   }
-   ws[WORDS_448] = carry;
+   ws[0] = word_add(a[0], b[0], &carry);
+   ws[1] = word_add(a[1], b[1], &carry);
+   ws[2] = word_add(a[2], b[2], &carry);
+   ws[3] = word_add(a[3], b[3], &carry);
+   ws[4] = word_add(a[4], b[4], &carry);
+   ws[5] = word_add(a[5], b[5], &carry);
+   ws[6] = word_add(a[6], b[6], &carry);
+   ws[7] = carry;
 
    reduce_after_add(out, ws);
 }
@@ -22134,9 +22947,13 @@ void gf_sub(std::span<uint64_t, WORDS_448> out,
    std::array<uint64_t, WORDS_448> h_1;  // NOLINT(*-member-init)
 
    uint64_t borrow = 0;
-   for(size_t i = 0; i < WORDS_448; ++i) {
-      h_0[i] = word_sub(a[i], b[i], &borrow);
-   }
+   h_0[0] = word_sub(a[0], b[0], &borrow);
+   h_0[1] = word_sub(a[1], b[1], &borrow);
+   h_0[2] = word_sub(a[2], b[2], &borrow);
+   h_0[3] = word_sub(a[3], b[3], &borrow);
+   h_0[4] = word_sub(a[4], b[4], &borrow);
+   h_0[5] = word_sub(a[5], b[5], &borrow);
+   h_0[6] = word_sub(a[6], b[6], &borrow);
    uint64_t delta = borrow;
    uint64_t delta_p = delta << 32;
    borrow = 0;
@@ -22164,21 +22981,116 @@ void gf_sub(std::span<uint64_t, WORDS_448> out,
    out[6] = h_1[6];
 }
 
+/// Square a field element n times
+void gf_sqr_n(std::span<uint64_t, WORDS_448> out, std::span<const uint64_t, WORDS_448> a, size_t n) {
+   gf_square(out, a);
+   for(size_t i = 1; i < n; ++i) {
+      gf_square(out, out);
+   }
+}
+
+/**
+ * @brief Compute x^(2^222 - 1) using an addition chain.
+ *
+ * This is the shared prefix of the addition chains for both
+ * inversion (x^(p-2)) and square root (x^((p-3)/4)).
+ *
+ * Addition chain from addchain tool (cost 446):
+ *   _11     = 1 + _10
+ *   _111    = 1 + _110
+ *   _111111 = _111 + _111 << 3
+ *   x12     = _111111 << 6 + _111111
+ *   x24     = x12 << 12 + x12
+ *   x30     = _111111 + x24 << 6
+ *   x48     = x24 << 6 << 18 + x24
+ *   x96     = x48 << 48 + x48
+ *   x192    = x96 << 96 + x96
+ *   x222    = x192 << 30 + x30
+ */
+void gf_pow_2_222m1(std::span<uint64_t, WORDS_448> x222,
+                    std::span<uint64_t, WORDS_448> x223,
+                    std::span<const uint64_t, WORDS_448> a) {
+   std::array<uint64_t, WORDS_448> t;  // NOLINT(*-member-init)
+
+   // _10 = a^2
+   std::array<uint64_t, WORDS_448> a2;  // NOLINT(*-member-init)
+   gf_square(a2, a);
+
+   // _11 = a^3
+   std::array<uint64_t, WORDS_448> a3;  // NOLINT(*-member-init)
+   gf_mul(a3, a, a2);
+
+   // _111 = a^7
+   std::array<uint64_t, WORDS_448> a7;  // NOLINT(*-member-init)
+   gf_square(t, a3);
+   gf_mul(a7, a, t);
+
+   // _111111 = a^63
+   std::array<uint64_t, WORDS_448> a63;  // NOLINT(*-member-init)
+   gf_sqr_n(t, a7, 3);
+   gf_mul(a63, a7, t);
+
+   // x12 = a^(2^12 - 1)
+   std::array<uint64_t, WORDS_448> x12;  // NOLINT(*-member-init)
+   gf_sqr_n(t, a63, 6);
+   gf_mul(x12, a63, t);
+
+   // x24 = a^(2^24 - 1)
+   std::array<uint64_t, WORDS_448> x24;  // NOLINT(*-member-init)
+   gf_sqr_n(t, x12, 12);
+   gf_mul(x24, x12, t);
+
+   // i34 = x24 << 6 = a^((2^24 - 1) * 2^6)
+   std::array<uint64_t, WORDS_448> i34;  // NOLINT(*-member-init)
+   gf_sqr_n(i34, x24, 6);
+
+   // x30 = a^(2^30 - 1)
+   std::array<uint64_t, WORDS_448> x30;  // NOLINT(*-member-init)
+   gf_mul(x30, a63, i34);
+
+   // x48 = a^(2^48 - 1)
+   std::array<uint64_t, WORDS_448> x48;  // NOLINT(*-member-init)
+   gf_sqr_n(t, i34, 18);
+   gf_mul(x48, x24, t);
+
+   // x96 = a^(2^96 - 1)
+   std::array<uint64_t, WORDS_448> x96;  // NOLINT(*-member-init)
+   gf_sqr_n(t, x48, 48);
+   gf_mul(x96, x48, t);
+
+   // x192 = a^(2^192 - 1)
+   std::array<uint64_t, WORDS_448> x192;  // NOLINT(*-member-init)
+   gf_sqr_n(t, x96, 96);
+   gf_mul(x192, x96, t);
+
+   // x222 = a^(2^222 - 1)
+   gf_sqr_n(t, x192, 30);
+   gf_mul(x222, x30, t);
+
+   // x223 = a^(2^223 - 1)
+   gf_square(t, x222);
+   gf_mul(x223, a, t);
+}
+
 /**
  * @brief Inversion in GF(P) using Fermat's little theorem:
  * x^-1 = x^(P-2) mod P
+ *
+ * Uses an optimized addition chain (cost 460) found by addchain.
+ * P-2 = 2^448 - 2^224 - 3
+ * return = (x223 << 223 + x222) << 2 + 1
  */
 void gf_inv(std::span<uint64_t, WORDS_448> out, std::span<const uint64_t, WORDS_448> a) {
-   clear_mem(out);
-   out[0] = 1;
-   // Square and multiply
-   for(int16_t t = 448; t >= 0; --t) {
-      gf_square(out, out);
-      // (P-2) has zero bits at indices 1, 224, 448. All others are one.
-      if(t != 448 && t != 224 && t != 1) {
-         gf_mul(out, out, a);
-      }
-   }
+   std::array<uint64_t, WORDS_448> x222;  // NOLINT(*-member-init)
+   std::array<uint64_t, WORDS_448> x223;  // NOLINT(*-member-init)
+   gf_pow_2_222m1(x222, x223, a);
+
+   // (x223 << 223 + x222) << 2 + 1
+   std::array<uint64_t, WORDS_448> t;  // NOLINT(*-member-init)
+   gf_sqr_n(t, x223, 223);
+   gf_mul(t, t, x222);
+   gf_sqr_n(t, t, 2);
+   gf_mul(out, t, a);
 }
 
 /**
@@ -22227,14 +23139,14 @@ std::array<uint8_t, BYTES_448> Gf448Elem::to_bytes() const {
    return bytes;
 }
 
-void Gf448Elem::ct_cond_swap(bool b, Gf448Elem& other) {
+void Gf448Elem::ct_cond_swap(CT::Mask<uint64_t> mask, Gf448Elem& other) {
    for(size_t i = 0; i < WORDS_448; ++i) {
-      CT::conditional_swap(b, m_x[i], other.m_x[i]);
+      mask.conditional_swap(m_x[i], other.m_x[i]);
    }
 }
 
-void Gf448Elem::ct_cond_assign(bool b, const Gf448Elem& other) {
-   CT::conditional_assign_mem(static_cast<uint64_t>(b), m_x.data(), other.m_x.data(), WORDS_448);
+void Gf448Elem::ct_cond_assign(CT::Mask<uint64_t> mask, const Gf448Elem& other) {
+   mask.select_n(m_x.data(), other.m_x.data(), m_x.data(), WORDS_448);
 }
 
 Gf448Elem Gf448Elem::operator+(const Gf448Elem& other) const {
@@ -22291,6 +23203,12 @@ bool Gf448Elem::bytes_are_canonical_representation(std::span<const uint8_t, BYTE
    return CT::is_equal(x_words.data(), x_words_canonical.data(), WORDS_448).as_bool();
 }
 
+Gf448Elem mul_a24(const Gf448Elem& a) {
+   Gf448Elem res(0);
+   gf_mul_a24(res.words(), a.words());
+   return res;
+}
+
 Gf448Elem square(const Gf448Elem& elem) {
    Gf448Elem res(0);
    gf_square(res.words(), elem.words());
@@ -22298,16 +23216,16 @@ Gf448Elem square(const Gf448Elem& elem) {
 }
 
 Gf448Elem root(const Gf448Elem& elem) {
-   Gf448Elem res(1);
+   // Compute elem^((P-3)/4) using an optimized addition chain (cost 457).
+   // (P-3)/4 = 2^446 - 2^222 - 1
+   // return = x223 << 223 + x222
+   std::array<uint64_t, WORDS_448> x222;  // NOLINT(*-member-init)
+   std::array<uint64_t, WORDS_448> x223;  // NOLINT(*-member-init)
+   gf_pow_2_222m1(x222, x223, elem.words());
 
-   // (P-3)/4 is an 445 bit integer with one zero bits at 222. All others are one.
-   for(int16_t t = 445; t >= 0; --t) {
-      gf_square(res.words(), res.words());
-      if(t != 222) {
-         gf_mul(res.words(), res.words(), elem.words());
-      }
-   }
-
+   Gf448Elem res(0);
+   gf_sqr_n(res.words(), x223, 223);
+   gf_mul(res.words(), res.words(), x222);
    return res;
 }
 
@@ -22471,6 +23389,31 @@ bool Scalar448::get_bit(size_t bit_pos) const {
    return (((m_scalar_words[bit_pos / word_sz] >> (bit_pos % word_sz)) & 1) == 1);
 }
 
+uint32_t Scalar448::get_window(size_t starting_pos, size_t width) const {
+   BOTAN_ARG_CHECK(width <= 32, "Window too wide");
+   constexpr size_t word_sz = sizeof(word) * 8;
+
+   // Bits at or beyond position 446 are zero
+   if(starting_pos >= 446) {
+      return 0;
+   }
+
+   // Clamp the effective width so we don't read past bit 445
+   const size_t effective_bits = std::min(width, size_t(446) - starting_pos);
+
+   const size_t word_idx = starting_pos / word_sz;
+   const size_t bit_idx = starting_pos % word_sz;
+
+   const uint64_t mask = (effective_bits >= 64) ? ~uint64_t(0) : (uint64_t(1) << effective_bits) - 1;
+
+   uint64_t val = m_scalar_words[word_idx] >> bit_idx;
+   if(bit_idx + effective_bits > word_sz && word_idx + 1 < WORDS) {
+      val |= m_scalar_words[word_idx + 1] << (word_sz - bit_idx);
+   }
+
+   return static_cast<uint32_t>(val & mask);
+}
+
 Scalar448 Scalar448::operator+(const Scalar448& other) const {
    auto sum = add(m_scalar_words, other.m_scalar_words);
    ct_subtract_L_if_bigger(sum);
@@ -22539,7 +23482,7 @@ std::unique_ptr<EncryptionPaddingScheme> EncryptionPaddingScheme::create(std::st
 #endif
 
 #if defined(BOTAN_HAS_EME_OAEP)
-   SCAN_Name req(algo_spec);
+   const SCAN_Name req(algo_spec);
 
    // TODO(Botan4) Remove all but "OAEP"
    if(req.algo_name() == "OAEP" || req.algo_name() == "EME-OAEP" || req.algo_name() == "EME1") {
@@ -22575,7 +23518,6 @@ EncryptionPaddingScheme::~EncryptionPaddingScheme() = default;
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
-
 
 
 
@@ -22644,8 +23586,8 @@ bool GCM_Mode::has_keying_material() const {
 void GCM_Mode::key_schedule(std::span<const uint8_t> key) {
    m_ctr->set_key(key);
 
-   const std::vector<uint8_t> zeros(GCM_BS);
-   m_ctr->set_iv(zeros.data(), zeros.size());
+   std::array<uint8_t, GCM_BS> zeros{};
+   m_ctr->set_iv(zeros);
 
    uint8_t H[GCM_BS] = {0};
    m_ctr->encipher(H);
@@ -22756,6 +23698,12 @@ void GCM_Decryption::finish_msg(secure_vector<uint8_t>& buffer, size_t offset) {
 namespace Botan {
 
 std::string GHASH::provider() const {
+#if defined(BOTAN_HAS_GHASH_AVX512_CLMUL)
+   if(auto feat = CPUID::check(CPUID::Feature::AVX512_CLMUL)) {
+      return *feat;
+   }
+#endif
+
 #if defined(BOTAN_HAS_GHASH_CLMUL_CPU)
    if(auto feat = CPUID::check(CPUID::Feature::HW_CLMUL)) {
       return *feat;
@@ -22774,15 +23722,22 @@ std::string GHASH::provider() const {
 void GHASH::ghash_multiply(std::span<uint8_t, GCM_BS> x, std::span<const uint8_t> input, size_t blocks) {
    BOTAN_ASSERT_NOMSG(input.size() % GCM_BS == 0);
 
+#if defined(BOTAN_HAS_GHASH_AVX512_CLMUL)
+   if(CPUID::has(CPUID::Feature::AVX512_CLMUL)) {
+      BOTAN_ASSERT_NOMSG(!m_H_pow.empty());
+      return ghash_multiply_avx512_clmul(x.data(), m_H_pow.data(), input.data(), blocks);
+   }
+#endif
+
 #if defined(BOTAN_HAS_GHASH_CLMUL_CPU)
    if(CPUID::has(CPUID::Feature::HW_CLMUL)) {
       BOTAN_ASSERT_NOMSG(!m_H_pow.empty());
-      return ghash_multiply_cpu(x.data(), m_H_pow.data(), input.data(), blocks);
+      return ghash_multiply_cpu(x.data(), m_H_pow, input.data(), blocks);
    }
 #endif
 
 #if defined(BOTAN_HAS_GHASH_CLMUL_VPERM)
-   if(CPUID::has(CPUID::Feature::SIMD_4X32)) {
+   if(CPUID::has(CPUID::Feature::SIMD_2X64)) {
       return ghash_multiply_vperm(x.data(), m_HM.data(), input.data(), blocks);
    }
 #endif
@@ -22832,13 +23787,22 @@ void GHASH::key_schedule(std::span<const uint8_t> key) {
    BOTAN_ASSERT_NOMSG(key.size() == GCM_BS);
    auto H = load_be<std::array<uint64_t, 2>>(key.first<GCM_BS>());
 
+#if defined(BOTAN_HAS_GHASH_AVX512_CLMUL)
+   if(CPUID::has(CPUID::Feature::AVX512_CLMUL)) {
+      zap(m_HM);
+      if(m_H_pow.size() != 32) {
+         m_H_pow.resize(32);
+      }
+      ghash_precompute_avx512_clmul(key.data(), m_H_pow.data());
+      // m_HM left empty
+      return;
+   }
+#endif
+
 #if defined(BOTAN_HAS_GHASH_CLMUL_CPU)
    if(CPUID::has(CPUID::Feature::HW_CLMUL)) {
       zap(m_HM);
-      if(m_H_pow.size() != 8) {
-         m_H_pow.resize(8);
-      }
-      ghash_precompute_cpu(key.data(), m_H_pow.data());
+      ghash_precompute_cpu(key.data(), m_H_pow);
       // m_HM left empty
       return;
    }
@@ -22883,6 +23847,14 @@ void GHASH::set_associated_data(std::span<const uint8_t> input) {
    ghash_update(m_H_ad, input);
    ghash_zeropad(m_H_ad);
    m_ad_len = input.size();
+}
+
+void GHASH::reset_associated_data() {
+   // This should only be called in GMAC context
+   BOTAN_STATE_CHECK(m_text_len == 0);
+   assert_key_material_set();
+   m_H_ad = {0};
+   m_ad_len = 0;
 }
 
 void GHASH::update_associated_data(std::span<const uint8_t> ad) {
@@ -22979,183 +23951,140 @@ void GHASH::ghash_final_block(std::span<uint8_t, GCM_BS> x, uint64_t ad_len, uin
 
 
 
-#if defined(BOTAN_SIMD_USE_SSSE3)
-   #include <immintrin.h>
-   #include <wmmintrin.h>
-#endif
-
 namespace Botan {
 
 namespace {
 
-// NOLINTBEGIN(portability-simd-intrinsics)
-
-BOTAN_FORCE_INLINE BOTAN_FN_ISA_SIMD_4X32 SIMD_4x32 reverse_vector(const SIMD_4x32& in) {
-#if defined(BOTAN_SIMD_USE_SSSE3)
-   const __m128i BSWAP_MASK = _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
-   return SIMD_4x32(_mm_shuffle_epi8(in.raw(), BSWAP_MASK));
-#elif defined(BOTAN_SIMD_USE_NEON)
-   const uint8_t maskb[16] = {15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0};
-   const uint8x16_t mask = vld1q_u8(maskb);
-   return SIMD_4x32(vreinterpretq_u32_u8(vqtbl1q_u8(vreinterpretq_u8_u32(in.raw()), mask)));
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-   const __vector unsigned char mask = {15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0};
-   return SIMD_4x32(vec_perm(in.raw(), in.raw(), mask));
-#endif
-}
-
-template <int M>
-BOTAN_FORCE_INLINE BOTAN_FN_ISA_CLMUL SIMD_4x32 clmul(const SIMD_4x32& H, const SIMD_4x32& x) {
-   static_assert(M == 0x00 || M == 0x01 || M == 0x10 || M == 0x11, "Valid clmul mode");
-
-#if defined(BOTAN_SIMD_USE_SSSE3)
-   return SIMD_4x32(_mm_clmulepi64_si128(x.raw(), H.raw(), M));
-#elif defined(BOTAN_SIMD_USE_NEON)
-   const uint64_t a = vgetq_lane_u64(vreinterpretq_u64_u32(x.raw()), M & 0x01);
-   const uint64_t b = vgetq_lane_u64(vreinterpretq_u64_u32(H.raw()), (M & 0x10) >> 4);
-
-   #if defined(BOTAN_BUILD_COMPILER_IS_MSVC)
-   __n64 a1 = {a}, b1 = {b};
-   return SIMD_4x32(vmull_p64(a1, b1));
-   #else
-   return SIMD_4x32(reinterpret_cast<uint32x4_t>(vmull_p64(a, b)));
-   #endif
-
-#elif defined(BOTAN_SIMD_USE_ALTIVEC)
-   const SIMD_4x32 mask_lo = SIMD_4x32(0, 0, 0xFFFFFFFF, 0xFFFFFFFF);
-   constexpr uint8_t flip = (std::endian::native == std::endian::big) ? 0x11 : 0x00;
-
-   SIMD_4x32 i1 = x;
-   SIMD_4x32 i2 = H;
-
-   if constexpr(std::endian::native == std::endian::big) {
-      i1 = reverse_vector(i1).bswap();
-      i2 = reverse_vector(i2).bswap();
-   }
-
-   if constexpr(M == (0x11 ^ flip)) {
-      i1 &= mask_lo;
-      i2 &= mask_lo;
-   } else if constexpr(M == (0x10 ^ flip)) {
-      i1 = i1.shift_elems_left<2>();
-   } else if constexpr(M == (0x01 ^ flip)) {
-      i2 = i2.shift_elems_left<2>();
-   } else if constexpr(M == (0x00 ^ flip)) {
-      i1 = mask_lo.andc(i1);
-      i2 = mask_lo.andc(i2);
-   }
-
-   auto i1v = reinterpret_cast<__vector unsigned long long>(i1.raw());
-   auto i2v = reinterpret_cast<__vector unsigned long long>(i2.raw());
-
-   #if BOTAN_COMPILER_HAS_BUILTIN(__builtin_crypto_vpmsumd)
-   auto rv = __builtin_crypto_vpmsumd(i1v, i2v);
-   #else
-   auto rv = __builtin_altivec_crypto_vpmsumd(i1v, i2v);
-   #endif
-
-   auto z = SIMD_4x32(reinterpret_cast<__vector unsigned int>(rv));
-
-   if constexpr(std::endian::native == std::endian::big) {
-      z = reverse_vector(z).bswap();
-   }
-
-   return z;
-#endif
-}
-
-// NOLINTEND(portability-simd-intrinsics)
-
-inline SIMD_4x32 BOTAN_FN_ISA_CLMUL gcm_reduce(const SIMD_4x32& B0, const SIMD_4x32& B1) {
-   SIMD_4x32 X0 = B1.shr<31>();
-   SIMD_4x32 X1 = B1.shl<1>();
-   SIMD_4x32 X2 = B0.shr<31>();
-   SIMD_4x32 X3 = B0.shl<1>();
-
-   X3 |= X0.shift_elems_right<3>();
-   X3 |= X2.shift_elems_left<1>();
-   X1 |= X0.shift_elems_left<1>();
-
-   X0 = X1.shl<31>() ^ X1.shl<30>() ^ X1.shl<25>();
-
-   X1 ^= X0.shift_elems_left<3>();
-
-   X0 = X1 ^ X3 ^ X0.shift_elems_right<1>();
-   X0 ^= X1.shr<7>() ^ X1.shr<2>() ^ X1.shr<1>();
-   return X0;
-}
-
-inline SIMD_4x32 BOTAN_FN_ISA_CLMUL gcm_multiply(const SIMD_4x32& H, const SIMD_4x32& x) {
-   SIMD_4x32 T0 = clmul<0x11>(H, x);
-   SIMD_4x32 T1 = clmul<0x10>(H, x);
-   SIMD_4x32 T2 = clmul<0x01>(H, x);
-   SIMD_4x32 T3 = clmul<0x00>(H, x);
-
-   T1 ^= T2;
-   T0 ^= T1.shift_elems_right<2>();
-   T3 ^= T1.shift_elems_left<2>();
-
-   return gcm_reduce(T0, T3);
-}
-
-inline SIMD_4x32 BOTAN_FN_ISA_CLMUL gcm_multiply_x4(const SIMD_4x32& H1,
-                                                    const SIMD_4x32& H2,
-                                                    const SIMD_4x32& H3,
-                                                    const SIMD_4x32& H4,
-                                                    const SIMD_4x32& X1,
-                                                    const SIMD_4x32& X2,
-                                                    const SIMD_4x32& X3,
-                                                    const SIMD_4x32& X4) {
-   /*
-   * Multiply with delayed reduction, algorithm by Krzysztof Jankowski
-   * and Pierre Laurent of Intel
-   */
-
+inline SIMD_4x32 BOTAN_FN_ISA_CLMUL polyval_multiply_x4(const SIMD_4x32& H1,
+                                                        const SIMD_4x32& H2,
+                                                        const SIMD_4x32& H3,
+                                                        const SIMD_4x32& H4,
+                                                        const SIMD_4x32& X1,
+                                                        const SIMD_4x32& X2,
+                                                        const SIMD_4x32& X3,
+                                                        const SIMD_4x32& X4) {
    const SIMD_4x32 lo = (clmul<0x00>(H1, X1) ^ clmul<0x00>(H2, X2)) ^ (clmul<0x00>(H3, X3) ^ clmul<0x00>(H4, X4));
-
    const SIMD_4x32 hi = (clmul<0x11>(H1, X1) ^ clmul<0x11>(H2, X2)) ^ (clmul<0x11>(H3, X3) ^ clmul<0x11>(H4, X4));
 
-   SIMD_4x32 T;
+   SIMD_4x32 mid;
 
-   T ^= clmul<0x00>(H1 ^ H1.shift_elems_right<2>(), X1 ^ X1.shift_elems_right<2>());
-   T ^= clmul<0x00>(H2 ^ H2.shift_elems_right<2>(), X2 ^ X2.shift_elems_right<2>());
-   T ^= clmul<0x00>(H3 ^ H3.shift_elems_right<2>(), X3 ^ X3.shift_elems_right<2>());
-   T ^= clmul<0x00>(H4 ^ H4.shift_elems_right<2>(), X4 ^ X4.shift_elems_right<2>());
-   T ^= lo;
-   T ^= hi;
+   mid ^= clmul<0x00>(H1 ^ H1.shift_elems_right<2>(), X1 ^ X1.shift_elems_right<2>());
+   mid ^= clmul<0x00>(H2 ^ H2.shift_elems_right<2>(), X2 ^ X2.shift_elems_right<2>());
+   mid ^= clmul<0x00>(H3 ^ H3.shift_elems_right<2>(), X3 ^ X3.shift_elems_right<2>());
+   mid ^= clmul<0x00>(H4 ^ H4.shift_elems_right<2>(), X4 ^ X4.shift_elems_right<2>());
+   mid ^= lo;
+   mid ^= hi;
 
-   return gcm_reduce(hi ^ T.shift_elems_right<2>(), lo ^ T.shift_elems_left<2>());
+   return polyval_reduce(hi ^ mid.shift_elems_right<2>(), lo ^ mid.shift_elems_left<2>());
+}
+
+inline SIMD_4x32 BOTAN_FN_ISA_CLMUL polyval_multiply_x8(const SIMD_4x32& H1,
+                                                        const SIMD_4x32& H2,
+                                                        const SIMD_4x32& H3,
+                                                        const SIMD_4x32& H4,
+                                                        const SIMD_4x32& H5,
+                                                        const SIMD_4x32& H6,
+                                                        const SIMD_4x32& H7,
+                                                        const SIMD_4x32& H8,
+                                                        const SIMD_4x32& X1,
+                                                        const SIMD_4x32& X2,
+                                                        const SIMD_4x32& X3,
+                                                        const SIMD_4x32& X4,
+                                                        const SIMD_4x32& X5,
+                                                        const SIMD_4x32& X6,
+                                                        const SIMD_4x32& X7,
+                                                        const SIMD_4x32& X8) {
+   const SIMD_4x32 lo = clmul<0x00>(H1, X1) ^ clmul<0x00>(H2, X2) ^ clmul<0x00>(H3, X3) ^ clmul<0x00>(H4, X4) ^
+                        clmul<0x00>(H5, X5) ^ clmul<0x00>(H6, X6) ^ clmul<0x00>(H7, X7) ^ clmul<0x00>(H8, X8);
+
+   const SIMD_4x32 hi = clmul<0x11>(H1, X1) ^ clmul<0x11>(H2, X2) ^ clmul<0x11>(H3, X3) ^ clmul<0x11>(H4, X4) ^
+                        clmul<0x11>(H5, X5) ^ clmul<0x11>(H6, X6) ^ clmul<0x11>(H7, X7) ^ clmul<0x11>(H8, X8);
+
+   SIMD_4x32 mid;
+
+   mid ^= clmul<0x00>(H1 ^ H1.shift_elems_right<2>(), X1 ^ X1.shift_elems_right<2>());
+   mid ^= clmul<0x00>(H2 ^ H2.shift_elems_right<2>(), X2 ^ X2.shift_elems_right<2>());
+   mid ^= clmul<0x00>(H3 ^ H3.shift_elems_right<2>(), X3 ^ X3.shift_elems_right<2>());
+   mid ^= clmul<0x00>(H4 ^ H4.shift_elems_right<2>(), X4 ^ X4.shift_elems_right<2>());
+   mid ^= clmul<0x00>(H5 ^ H5.shift_elems_right<2>(), X5 ^ X5.shift_elems_right<2>());
+   mid ^= clmul<0x00>(H6 ^ H6.shift_elems_right<2>(), X6 ^ X6.shift_elems_right<2>());
+   mid ^= clmul<0x00>(H7 ^ H7.shift_elems_right<2>(), X7 ^ X7.shift_elems_right<2>());
+   mid ^= clmul<0x00>(H8 ^ H8.shift_elems_right<2>(), X8 ^ X8.shift_elems_right<2>());
+   mid ^= lo;
+   mid ^= hi;
+
+   return polyval_reduce(hi ^ mid.shift_elems_right<2>(), lo ^ mid.shift_elems_left<2>());
 }
 
 }  // namespace
 
-void BOTAN_FN_ISA_CLMUL GHASH::ghash_precompute_cpu(const uint8_t H_bytes[16], uint64_t H_pow[4 * 2]) {
-   const SIMD_4x32 H1 = reverse_vector(SIMD_4x32::load_le(H_bytes));
-   const SIMD_4x32 H2 = gcm_multiply(H1, H1);
-   const SIMD_4x32 H3 = gcm_multiply(H1, H2);
-   const SIMD_4x32 H4 = gcm_multiply(H2, H2);
+void BOTAN_FN_ISA_CLMUL GHASH::ghash_precompute_cpu(const uint8_t H_bytes[16], secure_vector<uint64_t>& H_pow) {
+   const SIMD_4x32 H1 = mulx_polyval(reverse_vector(SIMD_4x32::load_le(H_bytes)));
+   const SIMD_4x32 H2 = polyval_multiply(H1, H1);
+   const SIMD_4x32 H3 = polyval_multiply(H1, H2);
+   const SIMD_4x32 H4 = polyval_multiply(H2, H2);
 
-   H1.store_le(H_pow);
-   H2.store_le(H_pow + 2);
-   H3.store_le(H_pow + 4);
-   H4.store_le(H_pow + 6);
+   H_pow.reserve(2 * 8);
+   H_pow.resize(2 * 4);
+   H1.store_le(&H_pow[0]);  // NOLINT(*-container-data-pointer)
+   H2.store_le(&H_pow[2]);
+   H3.store_le(&H_pow[4]);
+   H4.store_le(&H_pow[6]);
 }
 
 void BOTAN_FN_ISA_CLMUL GHASH::ghash_multiply_cpu(uint8_t x[16],
-                                                  const uint64_t H_pow[8],
+                                                  secure_vector<uint64_t>& H_pow,
                                                   const uint8_t input[],
                                                   size_t blocks) {
-   /*
-   * Algorithms 1 and 5 from Intel's CLMUL guide
-   */
-   const SIMD_4x32 H1 = SIMD_4x32::load_le(H_pow);
+   BOTAN_ASSERT_NOMSG(H_pow.size() == 2 * 4 || H_pow.size() == 2 * 8);
+
+   const SIMD_4x32 H1 = SIMD_4x32::load_le(&H_pow[0]);  // NOLINT(*-container-data-pointer)
 
    SIMD_4x32 a = reverse_vector(SIMD_4x32::load_le(x));
 
+   if(blocks >= 8) {
+      const SIMD_4x32 H2 = SIMD_4x32::load_le(&H_pow[2]);
+      const SIMD_4x32 H3 = SIMD_4x32::load_le(&H_pow[4]);
+      const SIMD_4x32 H4 = SIMD_4x32::load_le(&H_pow[6]);
+
+      if(H_pow.size() < 2 * 8) {
+         H_pow.resize(2 * 8);
+         const SIMD_4x32 H5 = polyval_multiply(H4, H1);
+         const SIMD_4x32 H6 = polyval_multiply(H4, H2);
+         const SIMD_4x32 H7 = polyval_multiply(H4, H3);
+         const SIMD_4x32 H8 = polyval_multiply(H4, H4);
+         H5.store_le(&H_pow[8]);
+         H6.store_le(&H_pow[10]);
+         H7.store_le(&H_pow[12]);
+         H8.store_le(&H_pow[14]);
+      }
+
+      const SIMD_4x32 H5 = SIMD_4x32::load_le(&H_pow[8]);
+      const SIMD_4x32 H6 = SIMD_4x32::load_le(&H_pow[10]);
+      const SIMD_4x32 H7 = SIMD_4x32::load_le(&H_pow[12]);
+      const SIMD_4x32 H8 = SIMD_4x32::load_le(&H_pow[14]);
+
+      while(blocks >= 8) {
+         const SIMD_4x32 m0 = reverse_vector(SIMD_4x32::load_le(input));
+         const SIMD_4x32 m1 = reverse_vector(SIMD_4x32::load_le(input + 16 * 1));
+         const SIMD_4x32 m2 = reverse_vector(SIMD_4x32::load_le(input + 16 * 2));
+         const SIMD_4x32 m3 = reverse_vector(SIMD_4x32::load_le(input + 16 * 3));
+         const SIMD_4x32 m4 = reverse_vector(SIMD_4x32::load_le(input + 16 * 4));
+         const SIMD_4x32 m5 = reverse_vector(SIMD_4x32::load_le(input + 16 * 5));
+         const SIMD_4x32 m6 = reverse_vector(SIMD_4x32::load_le(input + 16 * 6));
+         const SIMD_4x32 m7 = reverse_vector(SIMD_4x32::load_le(input + 16 * 7));
+
+         a = polyval_multiply_x8(H1, H2, H3, H4, H5, H6, H7, H8, m7, m6, m5, m4, m3, m2, m1, m0 ^ a);
+
+         input += 8 * 16;
+         blocks -= 8;
+      }
+   }
+
    if(blocks >= 4) {
-      const SIMD_4x32 H2 = SIMD_4x32::load_le(H_pow + 2);
-      const SIMD_4x32 H3 = SIMD_4x32::load_le(H_pow + 4);
-      const SIMD_4x32 H4 = SIMD_4x32::load_le(H_pow + 6);
+      const SIMD_4x32 H2 = SIMD_4x32::load_le(&H_pow[2]);
+      const SIMD_4x32 H3 = SIMD_4x32::load_le(&H_pow[4]);
+      const SIMD_4x32 H4 = SIMD_4x32::load_le(&H_pow[6]);
 
       while(blocks >= 4) {
          const SIMD_4x32 m0 = reverse_vector(SIMD_4x32::load_le(input));
@@ -23164,7 +24093,7 @@ void BOTAN_FN_ISA_CLMUL GHASH::ghash_multiply_cpu(uint8_t x[16],
          const SIMD_4x32 m3 = reverse_vector(SIMD_4x32::load_le(input + 16 * 3));
 
          a ^= m0;
-         a = gcm_multiply_x4(H1, H2, H3, H4, m3, m2, m1, a);
+         a = polyval_multiply_x4(H1, H2, H3, H4, m3, m2, m1, a);
 
          input += 4 * 16;
          blocks -= 4;
@@ -23175,7 +24104,7 @@ void BOTAN_FN_ISA_CLMUL GHASH::ghash_multiply_cpu(uint8_t x[16],
       const SIMD_4x32 m = reverse_vector(SIMD_4x32::load_le(input + 16 * i));
 
       a ^= m;
-      a = gcm_multiply(H1, a);
+      a = polyval_multiply(H1, a);
    }
 
    a = reverse_vector(a);
@@ -23569,7 +24498,7 @@ size_t hex_decode(uint8_t output[], const char input[], size_t input_length, siz
    }
 
    input_consumed = input_length;
-   size_t written = (out_ptr - output);
+   const size_t written = (out_ptr - output);
 
    /*
    * We only got half of a uint8_t at the end; zap the half-written
@@ -23585,7 +24514,7 @@ size_t hex_decode(uint8_t output[], const char input[], size_t input_length, siz
 
 size_t hex_decode(uint8_t output[], const char input[], size_t input_length, bool ignore_ws) {
    size_t consumed = 0;
-   size_t written = hex_decode(output, input, input_length, consumed, ignore_ws);
+   const size_t written = hex_decode(output, input, input_length, consumed, ignore_ws);
 
    if(consumed != input_length) {
       throw Invalid_Argument("hex_decode: input did not have full bytes");
@@ -23605,7 +24534,7 @@ size_t hex_decode(std::span<uint8_t> output, std::string_view input, bool ignore
 secure_vector<uint8_t> hex_decode_locked(const char input[], size_t input_length, bool ignore_ws) {
    secure_vector<uint8_t> bin(1 + input_length / 2);
 
-   size_t written = hex_decode(bin.data(), input, input_length, ignore_ws);
+   const size_t written = hex_decode(bin.data(), input, input_length, ignore_ws);
 
    bin.resize(written);
    return bin;
@@ -23618,7 +24547,7 @@ secure_vector<uint8_t> hex_decode_locked(std::string_view input, bool ignore_ws)
 std::vector<uint8_t> hex_decode(const char input[], size_t input_length, bool ignore_ws) {
    std::vector<uint8_t> bin(1 + input_length / 2);
 
-   size_t written = hex_decode(bin.data(), input, input_length, ignore_ws);
+   const size_t written = hex_decode(bin.data(), input, input_length, ignore_ws);
 
    bin.resize(written);
    return bin;
@@ -23654,8 +24583,8 @@ void HKDF::perform_kdf(std::span<uint8_t> key,
                        std::span<const uint8_t> secret,
                        std::span<const uint8_t> salt,
                        std::span<const uint8_t> label) const {
-   HKDF_Extract extract(m_prf->new_object());
-   HKDF_Expand expand(m_prf->new_object());
+   const HKDF_Extract extract(m_prf->new_object());
+   const HKDF_Expand expand(m_prf->new_object());
    secure_vector<uint8_t> prk(m_prf->output_length());
 
    extract.derive_key(prk, secret, salt, {});
@@ -23750,7 +24679,7 @@ secure_vector<uint8_t> hkdf_expand_label(std::string_view hash_fn,
    BOTAN_ARG_CHECK(label.size() <= 0xFF, "HKDF-Expand-Label label too long");
    BOTAN_ARG_CHECK(hash_val.size() <= 0xFF, "HKDF-Expand-Label hash too long");
 
-   HKDF_Expand hkdf(MessageAuthenticationCode::create_or_throw(fmt("HMAC({})", hash_fn)));
+   const HKDF_Expand hkdf(MessageAuthenticationCode::create_or_throw(fmt("HMAC({})", hash_fn)));
 
    const auto prefix = concat<std::vector<uint8_t>>(store_be(static_cast<uint16_t>(length)),
                                                     store_be(static_cast<uint8_t>(label.size())),
@@ -23800,7 +24729,7 @@ void HMAC::final_result(std::span<uint8_t> mac) {
 
 Key_Length_Specification HMAC::key_spec() const {
    // Support very long lengths for things like PBKDF2 and the TLS PRF
-   return Key_Length_Specification(0, 4096);
+   return Key_Length_Specification(0, 8192);
 }
 
 size_t HMAC::output_length() const {
@@ -24184,6 +25113,12 @@ size_t keccak_int_encoding_size(size_t x) {
 namespace Botan {
 
 std::string Keccak_Permutation::provider() const {
+#if defined(BOTAN_HAS_KECCAK_PERM_AVX512)
+   if(auto feat = CPUID::check(CPUID::Feature::AVX512)) {
+      return *feat;
+   }
+#endif
+
 #if defined(BOTAN_HAS_KECCAK_PERM_BMI2)
    if(auto feat = CPUID::check(CPUID::Feature::BMI)) {
       return *feat;
@@ -24241,6 +25176,12 @@ void Keccak_Permutation::finish() {
 }
 
 void Keccak_Permutation::permute() {
+#if defined(BOTAN_HAS_KECCAK_PERM_AVX512)
+   if(CPUID::has(CPUID::Feature::AVX512)) {
+      return permute_avx512();
+   }
+#endif
+
 #if defined(BOTAN_HAS_KECCAK_PERM_BMI2)
    if(CPUID::has(CPUID::Feature::BMI)) {
       return permute_bmi2();
@@ -24967,10 +25908,14 @@ KyberPolyMat sample_matrix(StrongSpan<const KyberSeedRho> seed, bool transposed,
 
    KyberPolyMat mat(mode.k(), mode.k());
 
+   const auto& sym = mode.symmetric_primitives();
+   std::unique_ptr<Botan::XOF> xof;
+
    for(uint8_t i = 0; i < mode.k(); ++i) {
       for(uint8_t j = 0; j < mode.k(); ++j) {
          const auto pos = (transposed) ? std::tuple(i, j) : std::tuple(j, i);
-         sample_ntt_uniform(mat[i][j], mode.symmetric_primitives().XOF(seed, pos));
+         sym.setup_XOF(xof, seed, pos);
+         sample_ntt_uniform(mat[i][j], *xof);
       }
    }
 
@@ -25219,9 +26164,10 @@ Kyber_PublicKeyInternal::Kyber_PublicKeyInternal(KyberConstants mode, KyberPolyV
 void Kyber_PublicKeyInternal::indcpa_encrypt(StrongSpan<KyberCompressedCiphertext> out_ct,
                                              StrongSpan<const KyberMessage> m,
                                              StrongSpan<const KyberEncryptionRandomness> r,
-                                             const KyberPolyMat& At) const {
+                                             const KyberPolyMat& At,
+                                             const KyberConstants& mode) const {
    // The nonce N is handled internally by the PolynomialSampler
-   Kyber_Algos::PolynomialSampler ps(r, m_mode);
+   Kyber_Algos::PolynomialSampler ps(r, mode);
    const auto y = ntt(ps.sample_polynomial_vector_cbd_eta1());
    const auto e1 = ps.sample_polynomial_vector_cbd_eta2();
    const auto e2 = ps.sample_polynomial_cbd_eta2();
@@ -25436,13 +26382,13 @@ namespace Botan {
 void ML_KEM_Encryptor::encapsulate(StrongSpan<KyberCompressedCiphertext> out_encapsulated_key,
                                    StrongSpan<KyberSharedSecret> out_shared_key,
                                    RandomNumberGenerator& rng) {
-   const auto& sym = m_public_key->mode().symmetric_primitives();
+   const auto& sym = mode().symmetric_primitives();
 
    const auto m = rng.random_vec<KyberMessage>(KyberConstants::SEED_BYTES);
    auto scope = CT::scoped_poison(m);
 
    const auto [K, r] = sym.G(m, m_public_key->H_public_key_bits_raw());
-   m_public_key->indcpa_encrypt(out_encapsulated_key, m, r, precomputed_matrix_At());
+   m_public_key->indcpa_encrypt(out_encapsulated_key, m, r, precomputed_matrix_At(), mode());
 
    // TODO: avoid this copy by letting sym.G() directly write to the span.
    copy_mem(out_shared_key, K);
@@ -25460,7 +26406,7 @@ void ML_KEM_Decryptor::decapsulate(StrongSpan<KyberSharedSecret> out_shared_key,
                                    StrongSpan<const KyberCompressedCiphertext> c) {
    auto scope = CT::scoped_poison(*m_private_key);
 
-   const auto& sym = m_public_key->mode().symmetric_primitives();
+   const auto& sym = mode().symmetric_primitives();
 
    const auto& h = m_public_key->H_public_key_bits_raw();
    const auto& z = m_private_key->z();
@@ -25469,11 +26415,11 @@ void ML_KEM_Decryptor::decapsulate(StrongSpan<KyberSharedSecret> out_shared_key,
    const auto [K_prime, r_prime] = sym.G(m_prime, h);
 
    const auto K_bar = sym.J(z, c);
-   const auto c_prime = m_public_key->indcpa_encrypt(m_prime, r_prime, precomputed_matrix_At());
+   const auto c_prime = m_public_key->indcpa_encrypt(m_prime, r_prime, precomputed_matrix_At(), mode());
 
    BOTAN_ASSERT_NOMSG(c.size() == c_prime.size());
    BOTAN_ASSERT_NOMSG(K_prime.size() == K_bar.size() && out_shared_key.size() == K_bar.size());
-   const auto reencrypt_success = CT::is_equal(c.data(), c_prime.data(), c.size());
+   const auto reencrypt_success = CT::is_equal<uint8_t>(c, c_prime);
    CT::conditional_copy_mem(reencrypt_success, out_shared_key.data(), K_prime.data(), K_bar.data(), K_prime.size());
 
    CT::unpoison(out_shared_key);
@@ -25549,7 +26495,7 @@ std::unique_ptr<Cipher_Mode> Cipher_Mode::create(std::string_view algo,
 
    if(algo.find('/') != std::string::npos) {
       const std::vector<std::string> algo_parts = split_on(algo, '/');
-      std::string_view cipher_name = algo_parts[0];
+      const std::string_view cipher_name = algo_parts[0];
       const std::vector<std::string> mode_info = parse_algorithm_name(algo_parts[1]);
 
       if(mode_info.empty()) {
@@ -25572,7 +26518,7 @@ std::unique_ptr<Cipher_Mode> Cipher_Mode::create(std::string_view algo,
 
 #if defined(BOTAN_HAS_BLOCK_CIPHER)
 
-   SCAN_Name spec(algo);
+   const SCAN_Name spec(algo);
 
    if(spec.arg_count() == 0) {
       return std::unique_ptr<Cipher_Mode>();
@@ -27744,7 +28690,7 @@ void basecase_mul(word z[], size_t z_size, const word x[], size_t x_size, const 
 
    const size_t x_size_8 = x_size - (x_size % 8);
 
-   clear_mem(z, z_size);
+   zeroize_buffer(z, z_size);
 
    for(size_t i = 0; i != y_size; ++i) {
       const word y_i = y[i];
@@ -27770,7 +28716,7 @@ void basecase_sqr(word z[], size_t z_size, const word x[], size_t x_size) {
 
    const size_t x_size_8 = x_size - (x_size % 8);
 
-   clear_mem(z, z_size);
+   zeroize_buffer(z, z_size);
 
    for(size_t i = 0; i != x_size; ++i) {
       const word x_i = x[i];
@@ -27827,12 +28773,12 @@ void karatsuba_mul(word z[], const word x[], const word y[], size_t N, word work
    word* ws0 = workspace;
    word* ws1 = workspace + N;
 
-   clear_mem(workspace, 2 * N);
+   zeroize_buffer(workspace, 2 * N);
 
    /*
    * If either of cmp0 or cmp1 is zero then z0 or z1 resp is zero here,
    * resulting in a no-op - z0*z1 will be equal to zero so we don't need to do
-   * anything, clear_mem above already set the correct result.
+   * anything, zeroize_buffer above already set the correct result.
    *
    * However we ignore the result of the comparisons and always perform the
    * subtractions and recursively multiply to avoid the timing channel.
@@ -27857,7 +28803,7 @@ void karatsuba_mul(word z[], const word x[], const word y[], size_t N, word work
    z_carry += bigint_add2(z + N + N2, N2, &ws_carry, 1);
    bigint_add2(z + N + N2, N2, &z_carry, 1);
 
-   clear_mem(workspace + N, N2);
+   zeroize_buffer(workspace + N, N2);
 
    bigint_cnd_add(neg_mask.value(), z + N2, workspace, 2 * N - N2);
    bigint_cnd_sub((~neg_mask).value(), z + N2, workspace, 2 * N - N2);
@@ -27894,7 +28840,7 @@ void karatsuba_sqr(word z[], const word x[], size_t N, word workspace[]) {
    word* ws0 = workspace;
    word* ws1 = workspace + N;
 
-   clear_mem(workspace, 2 * N);
+   zeroize_buffer(workspace, 2 * N);
 
    // See comment in karatsuba_mul
    bigint_sub_abs(z0, x0, x1, N2, workspace);
@@ -28010,7 +28956,7 @@ void bigint_mul(word z[],
                 size_t y_sw,
                 word workspace[],
                 size_t ws_size) {
-   clear_mem(z, z_size);
+   zeroize_buffer(z, z_size);
 
    if(x_sw == 1) {
       bigint_linmul3(z, y, y_sw, x[0]);
@@ -28045,7 +28991,7 @@ void bigint_mul(word z[],
 * Squaring Algorithm Dispatcher
 */
 void bigint_sqr(word z[], size_t z_size, const word x[], size_t x_size, size_t x_sw, word workspace[], size_t ws_size) {
-   clear_mem(z, z_size);
+   zeroize_buffer(z, z_size);
 
    BOTAN_ASSERT(z_size / 2 >= x_sw, "Output size is sufficient");
 
@@ -28079,7 +29025,7 @@ void bigint_sqr(word z[], size_t z_size, const word x[], size_t x_size, size_t x
 }  // namespace Botan
 /*
 * Montgomery Reduction
-* (C) 1999-2011 Jack Lloyd
+* (C) 1999-2011,2025 Jack Lloyd
 *     2006 Luca Piccarreta
 *     2016 Matthias Gierlings
 *
@@ -28089,6 +29035,68 @@ void bigint_sqr(word z[], size_t z_size, const word x[], size_t x_size, size_t x
 
 
 namespace Botan {
+
+namespace {
+
+BOTAN_FORCE_INLINE void mul_rev_range(word3<word>& accum, const word ws[], const word p[], size_t bound) {
+   /*
+   Unrolled version of:
+
+   for(size_t i = 0; i < bound; ++i) {
+      accum.mul(ws[i], p[bound - i]);
+   }
+   */
+
+   size_t lower = 0;
+   while(lower < bound) {
+      const size_t upper = bound - lower;
+
+      if(upper >= 16) {
+         accum.mul(ws[lower], p[upper]);
+         accum.mul(ws[lower + 1], p[upper - 1]);
+         accum.mul(ws[lower + 2], p[upper - 2]);
+         accum.mul(ws[lower + 3], p[upper - 3]);
+         accum.mul(ws[lower + 4], p[upper - 4]);
+         accum.mul(ws[lower + 5], p[upper - 5]);
+         accum.mul(ws[lower + 6], p[upper - 6]);
+         accum.mul(ws[lower + 7], p[upper - 7]);
+         accum.mul(ws[lower + 8], p[upper - 8]);
+         accum.mul(ws[lower + 9], p[upper - 9]);
+         accum.mul(ws[lower + 10], p[upper - 10]);
+         accum.mul(ws[lower + 11], p[upper - 11]);
+         accum.mul(ws[lower + 12], p[upper - 12]);
+         accum.mul(ws[lower + 13], p[upper - 13]);
+         accum.mul(ws[lower + 14], p[upper - 14]);
+         accum.mul(ws[lower + 15], p[upper - 15]);
+         lower += 16;
+      } else if(upper >= 8) {
+         accum.mul(ws[lower], p[upper]);
+         accum.mul(ws[lower + 1], p[upper - 1]);
+         accum.mul(ws[lower + 2], p[upper - 2]);
+         accum.mul(ws[lower + 3], p[upper - 3]);
+         accum.mul(ws[lower + 4], p[upper - 4]);
+         accum.mul(ws[lower + 5], p[upper - 5]);
+         accum.mul(ws[lower + 6], p[upper - 6]);
+         accum.mul(ws[lower + 7], p[upper - 7]);
+         lower += 8;
+      } else if(upper >= 4) {
+         accum.mul(ws[lower], p[upper]);
+         accum.mul(ws[lower + 1], p[upper - 1]);
+         accum.mul(ws[lower + 2], p[upper - 2]);
+         accum.mul(ws[lower + 3], p[upper - 3]);
+         lower += 4;
+      } else if(upper >= 2) {
+         accum.mul(ws[lower], p[upper]);
+         accum.mul(ws[lower + 1], p[upper - 1]);
+         lower += 2;
+      } else {
+         accum.mul(ws[lower], p[upper]);
+         lower += 1;
+      }
+   }
+}
+
+}  // namespace
 
 /*
 * Montgomery reduction - product scanning form
@@ -28113,19 +29121,13 @@ void bigint_monty_redc_generic(
    ws[0] = accum.monty_step(p[0], p_dash);
 
    for(size_t i = 1; i != p_size; ++i) {
-      for(size_t j = 0; j < i; ++j) {
-         accum.mul(ws[j], p[i - j]);
-      }
-
+      mul_rev_range(accum, ws, p, i);
       accum.add(z[i]);
       ws[i] = accum.monty_step(p[0], p_dash);
    }
 
    for(size_t i = 0; i != p_size - 1; ++i) {
-      for(size_t j = i + 1; j != p_size; ++j) {
-         accum.mul(ws[j], p[p_size + i - j]);
-      }
-
+      mul_rev_range(accum, &ws[i + 1], &p[i], p_size - (i + 1));
       accum.add(z[p_size + i]);
       ws[i] = accum.extract();
    }
@@ -28138,7 +29140,7 @@ void bigint_monty_redc_generic(
 
    /*
    * The result might need to be reduced mod p. To avoid a timing
-   * channel, always perform the subtraction. If in the compution
+   * channel, always perform the subtraction. If in the computation
    * of x - p a borrow is required then x was already < p.
    *
    * x starts at ws[0] and is p_size bytes long plus a possible high
@@ -28159,7 +29161,7 @@ void bigint_monty_redc_generic(
 
 }  // namespace Botan
 /*
-* This file was automatically generated by ./src/scripts/dev_tools/gen_mp_monty.py on 2025-11-02
+* This file was automatically generated by ./src/scripts/dev_tools/gen_mp_monty.py on 2025-12-10
 * All manual changes will be lost. Edit the script instead.
 *
 * Botan is released under the Simplified BSD License (see license.txt)
@@ -28198,7 +29200,7 @@ void bigint_monty_redc_4(word r[4], const word z[8], const word p[4], word p_das
    ws[2] = accum.extract();
    accum.add(z[7]);
    ws[3] = accum.extract();
-   word w1 = accum.extract();
+   const word w1 = accum.extract();
    bigint_monty_maybe_sub<4>(r, w1, ws, p);
 }
 
@@ -28258,7 +29260,7 @@ void bigint_monty_redc_6(word r[6], const word z[12], const word p[6], word p_da
    ws[4] = accum.extract();
    accum.add(z[11]);
    ws[5] = accum.extract();
-   word w1 = accum.extract();
+   const word w1 = accum.extract();
    bigint_monty_maybe_sub<6>(r, w1, ws, p);
 }
 
@@ -28352,7 +29354,7 @@ void bigint_monty_redc_8(word r[8], const word z[16], const word p[8], word p_da
    ws[6] = accum.extract();
    accum.add(z[15]);
    ws[7] = accum.extract();
-   word w1 = accum.extract();
+   const word w1 = accum.extract();
    bigint_monty_maybe_sub<8>(r, w1, ws, p);
 }
 
@@ -28538,7 +29540,7 @@ void bigint_monty_redc_12(word r[12], const word z[24], const word p[12], word p
    ws[10] = accum.extract();
    accum.add(z[23]);
    ws[11] = accum.extract();
-   word w1 = accum.extract();
+   const word w1 = accum.extract();
    bigint_monty_maybe_sub<12>(r, w1, ws, p);
 }
 
@@ -28848,7 +29850,7 @@ void bigint_monty_redc_16(word r[16], const word z[32], const word p[16], word p
    ws[14] = accum.extract();
    accum.add(z[31]);
    ws[15] = accum.extract();
-   word w1 = accum.extract();
+   const word w1 = accum.extract();
    bigint_monty_maybe_sub<16>(r, w1, ws, p);
 }
 
@@ -29502,7 +30504,7 @@ void bigint_monty_redc_24(word r[24], const word z[48], const word p[24], word p
    ws[22] = accum.extract();
    accum.add(z[47]);
    ws[23] = accum.extract();
-   word w1 = accum.extract();
+   const word w1 = accum.extract();
    bigint_monty_maybe_sub<24>(r, w1, ws, p);
 }
 
@@ -30628,7 +31630,7 @@ void bigint_monty_redc_32(word r[32], const word z[64], const word p[32], word p
    ws[30] = accum.extract();
    accum.add(z[63]);
    ws[31] = accum.extract();
-   word w1 = accum.extract();
+   const word w1 = accum.extract();
    bigint_monty_maybe_sub<32>(r, w1, ws, p);
 }
 
@@ -30654,7 +31656,7 @@ Barrett_Reduction Barrett_Reduction::for_secret_modulus(const BigInt& mod) {
    BOTAN_ARG_CHECK(!mod.is_zero(), "Modulus cannot be zero");
    BOTAN_ARG_CHECK(!mod.is_negative(), "Modulus cannot be negative");
 
-   size_t mod_words = mod.sig_words();
+   const size_t mod_words = mod.sig_words();
 
    // Compute mu = floor(2^{2k} / m)
    const size_t mu_bits = 2 * WordInfo<word>::bits * mod_words;
@@ -30665,7 +31667,7 @@ Barrett_Reduction Barrett_Reduction::for_public_modulus(const BigInt& mod) {
    BOTAN_ARG_CHECK(!mod.is_zero(), "Modulus cannot be zero");
    BOTAN_ARG_CHECK(!mod.is_negative(), "Modulus cannot be negative");
 
-   size_t mod_words = mod.sig_words();
+   const size_t mod_words = mod.sig_words();
 
    // Compute mu = floor(2^{2k} / m)
    const size_t mu_bits = 2 * WordInfo<word>::bits * mod_words;
@@ -30752,13 +31754,11 @@ BigInt barrett_reduce(
    /*
    If r is negative then we have to set r to r + 2^(k+1)
 
-   However for r negative computing this sum is equivalent to computing 2^(k+1) - r
+   However for r negative computing this sum is equivalent to computing 2^(k+1) - abs(r)
    */
-   word borrow = 0;
-   for(size_t i = 0; i != mod_words + 1; ++i) {
-      ws[i] = word_sub(static_cast<word>(0), r[i], &borrow);
-   }
-   ws[mod_words + 1] = word_sub(static_cast<word>(1), r[mod_words + 1], &borrow);
+   clear_mem(ws.data(), mod_words + 2);
+   ws[mod_words + 1] = 1;
+   bigint_sub2(ws.data(), mod_words + 2, r.data(), mod_words + 2);
 
    // If relative_size > 0 then assign r to 2^(k+1) - r
    CT::Mask<word>::is_equal(static_cast<word>(relative_size), 1).select_n(r.data(), ws.data(), r.data(), mod_words + 2);
@@ -30770,7 +31770,7 @@ BigInt barrett_reduce(
 
    BOTAN_ASSERT_NOMSG(r.size() >= mod_words + 1);
    for(size_t i = 0; i != bound; ++i) {
-      borrow = bigint_sub3(ws.data(), r.data(), mod_words + 1, modulus._data(), mod_words);
+      const word borrow = bigint_sub3(ws.data(), r.data(), mod_words + 1, modulus._data(), mod_words);
       CT::Mask<word>::is_zero(borrow).select_n(r.data(), ws.data(), r.data(), mod_words + 1);
    }
 
@@ -30995,7 +31995,7 @@ class Prime_Sieve final {
       Prime_Sieve(const BigInt& init_value, size_t sieve_size, word step, bool check_2p1) :
             m_sieve(std::min(sieve_size, PRIME_TABLE_SIZE)), m_step(step), m_check_2p1(check_2p1) {
          for(size_t i = 0; i != m_sieve.size(); ++i) {
-            m_sieve[i] = init_value % PRIMES[i];
+            m_sieve[i] = ct_mod_word(init_value, PRIMES[i]);
          }
       }
 
@@ -31006,7 +32006,7 @@ class Prime_Sieve final {
       bool next() {
          auto passes = CT::Mask<word>::set();
          for(size_t i = 0; i != m_sieve.size(); ++i) {
-            m_sieve[i] = (m_sieve[i] + m_step) % PRIMES[i];
+            m_sieve[i] = sieve_step_incr(m_sieve[i], m_step, PRIMES[i]);
 
             // If m_sieve[i] == 0 then val % p == 0 -> not prime
             passes &= CT::Mask<word>::expand(m_sieve[i]);
@@ -31029,6 +32029,19 @@ class Prime_Sieve final {
       }
 
    private:
+      // Return (v + step) % mod
+      //
+      // This assumes v is already < mod, which is an invariant of the sieve
+      static constexpr word sieve_step_incr(word v, word step, word mod) {
+         BOTAN_DEBUG_ASSERT(v < mod);
+         // The sieve step and primes are public so this modulo is ok
+         const word stepmod = (step >= mod) ? (step % mod) : step;
+
+         // This sum is at most 2*(mod-1)
+         const word next = (v + stepmod);
+         return next - CT::Mask<word>::is_gte(next, mod).if_set_return(mod);
+      }
+
       std::vector<word> m_sieve;
       const word m_step;
       const bool m_check_2p1;
@@ -31073,6 +32086,7 @@ BigInt random_prime(
    if(coprime.is_negative() || (!coprime.is_zero() && coprime.is_even()) || coprime.bits() >= bits) {
       throw Invalid_Argument("random_prime: invalid coprime");
    }
+   // TODO(Botan4) reduce this to ~1000
    if(modulo == 0 || modulo >= 100000) {
       throw Invalid_Argument("random_prime: Invalid modulo value");
    }
@@ -31203,6 +32217,8 @@ BigInt generate_rsa_prime(RandomNumberGenerator& keygen_rng,
 
    while(true) {
       BigInt p(keygen_rng, bits);
+
+      auto scope = CT::scoped_poison(p);
 
       /*
       Force high two bits so multiplication always results in expected n bit integer
@@ -31346,7 +32362,7 @@ BigInt inverse_mod_odd_modulus(const BigInt& n, const BigInt& mod) {
    // (mod / 2) + 1
    copy_mem(mp1o2, mod._data(), std::min(mod.size(), mod_words));
    bigint_shr1(mp1o2, mod_words, 1);
-   word carry = bigint_add2(mp1o2, mod_words, u_w, 1);
+   const word carry = bigint_add2(mp1o2, mod_words, u_w, 1);
    BOTAN_ASSERT_NOMSG(carry == 0);
 
    // Only n.bits() + mod.bits() iterations are required, but avoid leaking the size of n
@@ -31356,7 +32372,7 @@ BigInt inverse_mod_odd_modulus(const BigInt& n, const BigInt& mod) {
       const word odd_a = a_w[0] & 1;
 
       //if(odd_a) a -= b
-      word underflow = bigint_cnd_sub(odd_a, a_w, b_w, mod_words);
+      const word underflow = bigint_cnd_sub(odd_a, a_w, b_w, mod_words);
 
       //if(underflow) { b -= a; a = abs(a); swap(u, v); }
       bigint_cnd_add(underflow, b_w, a_w, mod_words);
@@ -31367,7 +32383,7 @@ BigInt inverse_mod_odd_modulus(const BigInt& n, const BigInt& mod) {
       bigint_shr1(a_w, mod_words, 1);
 
       //if(odd_a) u -= v;
-      word borrow = bigint_cnd_sub(odd_a, u_w, v_w, mod_words);
+      const word borrow = bigint_cnd_sub(odd_a, u_w, v_w, mod_words);
 
       // if(borrow) u += p
       bigint_cnd_add(borrow, u_w, mod._data(), mod_words);
@@ -31589,8 +32605,8 @@ uint64_t barrett_mod_65537(uint64_t x) {
    constexpr size_t s = 32;
    constexpr uint64_t c = (static_cast<uint64_t>(1) << s) / mod;
 
-   uint64_t q = (x * c) >> s;
-   uint64_t r = x - q * mod;
+   const uint64_t q = (x * c) >> s;
+   const uint64_t r = x - q * mod;
 
    auto r_gt_mod = CT::Mask<uint64_t>::is_gte(r, mod);
    return r - r_gt_mod.if_set_return(mod);
@@ -32084,7 +33100,11 @@ Montgomery_Exponentiation_State::Montgomery_Exponentiation_State(const Montgomer
    secure_vector<word> ws(2 * m_params.p_words());
 
    for(size_t i = 2; i != window_size; ++i) {
-      m_g.push_back(m_g[1].mul(m_g[i - 1], ws));
+      if(i % 2 == 0) {
+         m_g.push_back(m_g[i / 2].square(ws));
+      } else {
+         m_g.push_back(m_g[1].mul(m_g[i - 1], ws));
+      }
    }
 
    if(const_time) {
@@ -32180,7 +33200,7 @@ std::shared_ptr<const Montgomery_Exponentiation_State> monty_precompute(const Mo
                                                                         size_t window_bits,
                                                                         bool const_time) {
    BOTAN_ARG_CHECK(g < params.p(), "Montgomery base too big");
-   Montgomery_Int monty_g(params, g);
+   const Montgomery_Int monty_g(params, g);
    return monty_precompute(monty_g, window_bits, const_time);
 }
 
@@ -32226,6 +33246,7 @@ Montgomery_Int monty_multi_exp(
    const Montgomery_Int y3x2 = y3.mul(x2, ws);
    const Montgomery_Int y3x3 = y3.mul(x3, ws);
 
+   // NOLINTNEXTLINE(*-const-correctness) bug in clang-tidy
    const Montgomery_Int* M[16] = {&one,
                                   &x1,  // 0001
                                   &x2,  // 0010
@@ -32694,7 +33715,7 @@ bool is_lucas_probable_prime(const BigInt& C, const Barrett_Reduction& mod_C) {
    BigInt D = BigInt::from_word(5);
 
    for(;;) {
-      int32_t j = jacobi(D, C);
+      const int32_t j = jacobi(D, C);
       if(j == 0) {
          return false;
       }
@@ -32767,7 +33788,7 @@ bool is_bailie_psw_probable_prime(const BigInt& n, const Barrett_Reduction& mod_
       return false;
    }
 
-   Montgomery_Params monty_n(n, mod_n);
+   const Montgomery_Params monty_n(n, mod_n);
    const auto base = BigInt::from_word(2);
    return passes_miller_rabin_test(n, mod_n, monty_n, base) && is_lucas_probable_prime(n, mod_n);
 }
@@ -32783,7 +33804,13 @@ bool passes_miller_rabin_test(const BigInt& n,
    BOTAN_ASSERT_NOMSG(n > 1);
 
    const BigInt n_minus_1 = n - 1;
-   const size_t s = low_zero_bits(n_minus_1);
+   /*
+   * This unpoison is not ideal but realistically there is no way to
+   * hide the number of loop iterations (below). The main user of
+   * secret primes is RSA and we always generate RSA primes such that
+   * p == 3 (mod 4), which means s is always 1.
+   */
+   const size_t s = CT::driveby_unpoison(low_zero_bits(n_minus_1));
    const BigInt nm1_s = n_minus_1 >> s;
    const size_t n_bits = n.bits();
 
@@ -32824,7 +33851,7 @@ bool is_miller_rabin_probable_prime(const BigInt& n,
       return false;
    }
 
-   Montgomery_Params monty_n(n, mod_n);
+   const Montgomery_Params monty_n(n, mod_n);
 
    for(size_t i = 0; i != test_iterations; ++i) {
       const BigInt a = BigInt::random_integer(rng, BigInt::from_word(2), n);
@@ -33347,7 +34374,6 @@ BigInt Modular_Reducer::reduce(const BigInt& x) const {
    #include <pthread.h>
    #include <setjmp.h>
    #include <signal.h>
-   #include <stdlib.h>
    #include <sys/mman.h>
    #include <sys/resource.h>
    #include <sys/types.h>
@@ -33500,8 +34526,8 @@ uint64_t OS::get_cpu_cycle_counter() {
 
    #if defined(BOTAN_TARGET_ARCH_IS_X86_64)
 
-   uint32_t rtc_low = 0;
-   uint32_t rtc_high = 0;
+   uint32_t rtc_low = 0;   // NOLINT(*-const-correctness) clang-tidy doesn't understand inline asm
+   uint32_t rtc_high = 0;  // NOLINT(*-const-correctness) clang-tidy doesn't understand inline asm
    asm volatile("rdtsc" : "=d"(rtc_high), "=a"(rtc_low));
    rtc = (static_cast<uint64_t>(rtc_high) << 32) | rtc_low;
 
@@ -33590,7 +34616,7 @@ size_t OS::get_cpu_available() {
 }
 
 uint64_t OS::get_high_resolution_clock() {
-   if(uint64_t cpu_clock = OS::get_cpu_cycle_counter()) {
+   if(const uint64_t cpu_clock = OS::get_cpu_cycle_counter()) {
       return cpu_clock;
    }
 
@@ -33626,7 +34652,7 @@ uint64_t OS::get_high_resolution_clock() {
    #endif
    };
 
-   for(clockid_t clock : clock_types) {
+   for(const clockid_t clock : clock_types) {
       struct timespec ts {};
 
       if(::clock_gettime(clock, &ts) == 0) {
@@ -33689,7 +34715,7 @@ size_t OS::system_page_size() {
    const size_t default_page_size = 4096;
 
 #if defined(BOTAN_TARGET_OS_HAS_POSIX1)
-   long p = ::sysconf(_SC_PAGESIZE);
+   const long p = ::sysconf(_SC_PAGESIZE);
    if(p > 1) {
       return static_cast<size_t>(p);
    } else {
@@ -33836,6 +34862,34 @@ int get_locked_fd() {
    #endif
 }
 
+int mmap_flags() {
+   int flags = MAP_PRIVATE;
+
+   #if defined(MAP_ANONYMOUS)
+   flags |= MAP_ANONYMOUS;
+   #elif defined(MAP_ANON)
+   flags |= MAP_ANON;
+   #endif
+
+   #if defined(MAP_CONCEAL)
+   flags |= MAP_CONCEAL;
+   #elif defined(MAP_NOCORE)
+   flags |= MAP_NOCORE;
+   #endif
+
+   return flags;
+}
+
+int mmap_prot() {
+   int prot = PROT_READ | PROT_WRITE;  // NOLINT(*-const-correctness)
+
+   #if defined(PROT_MAX)
+   prot |= PROT_MAX(prot);
+   #endif
+
+   return prot;
+}
+
 }  // namespace
 
 #endif
@@ -33858,31 +34912,10 @@ std::vector<void*> OS::allocate_locked_pages(size_t count) {
       void* ptr = nullptr;
 
    #if defined(BOTAN_TARGET_OS_HAS_POSIX1) && defined(BOTAN_TARGET_OS_HAS_POSIX_MLOCK)
-
-      int mmap_flags = MAP_PRIVATE;
-
-      #if defined(MAP_ANONYMOUS)
-      mmap_flags |= MAP_ANONYMOUS;
-      #elif defined(MAP_ANON)
-      mmap_flags |= MAP_ANON;
-      #endif
-
-      #if defined(MAP_CONCEAL)
-      mmap_flags |= MAP_CONCEAL;
-      #elif defined(MAP_NOCORE)
-      mmap_flags |= MAP_NOCORE;
-      #endif
-
-      int mmap_prot = PROT_READ | PROT_WRITE;
-
-      #if defined(PROT_MAX)
-      mmap_prot |= PROT_MAX(mmap_prot);
-      #endif
-
       ptr = ::mmap(nullptr,
                    3 * page_size,
-                   mmap_prot,
-                   mmap_flags,
+                   mmap_prot(),
+                   mmap_flags(),
                    /*fd=*/locked_fd,
                    /*offset=*/0);
 
@@ -33983,7 +35016,7 @@ void OS::page_named(void* page, size_t size) {
 #if defined(BOTAN_TARGET_OS_HAS_PRCTL) && defined(PR_SET_VMA) && defined(PR_SET_VMA_ANON_NAME)
    static constexpr char name[] = "Botan mlock pool";
    // NOLINTNEXTLINE(*-vararg)
-   int r = prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, reinterpret_cast<uintptr_t>(page), size, name);
+   const int r = prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, reinterpret_cast<uintptr_t>(page), size, name);
    BOTAN_UNUSED(r);
 #else
    BOTAN_UNUSED(page, size);
@@ -34341,98 +35374,266 @@ bool matches(DataSource& source, std::string_view extra, size_t search_range) {
 * in https://github.com/floodyberry/poly1305-donna
 *
 * (C) 2014 Andrew Moon
-* (C) 2014 Jack Lloyd
+* (C) 2014,2025,2026 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
 
 
 
+#if defined(BOTAN_HAS_POLY1305_AVX2) || defined(BOTAN_HAS_POLY1305_AVX512)
+#endif
+
 namespace Botan {
 
 namespace {
 
-void poly1305_init(secure_vector<uint64_t>& X, const uint8_t key[32]) {
-   /* r &= 0xffffffc0ffffffc0ffffffc0fffffff */
-   const uint64_t t0 = load_le<uint64_t>(key, 0);
-   const uint64_t t1 = load_le<uint64_t>(key, 1);
+// State layout: pad || accum || r || r^2 || r^3 || ... || r^n
+// This ordering allows extending with more powers of r at the end
+constexpr size_t PAD_BASE = 0;  // pad[0..1]
+constexpr size_t H_BASE = 2;    // h[0..2] (accumulator)
+constexpr size_t R_BASE = 5;    // r^1[0..2], r^2[3..5], r^3[6..8], etc.
 
-   X[0] = (t0) & 0xffc0fffffff;
-   X[1] = ((t0 >> 44) | (t1 << 20)) & 0xfffffc0ffff;
-   X[2] = ((t1 >> 24)) & 0x00ffffffc0f;
+// Multiply two values in radix 2^44 representation mod (2^130 - 5)
+// h = a * b mod p
+BOTAN_FORCE_INLINE void poly1305_mul_44(uint64_t& h0,
+                                        uint64_t& h1,
+                                        uint64_t& h2,
+                                        uint64_t a0,
+                                        uint64_t a1,
+                                        uint64_t a2,
+                                        uint64_t b0,
+                                        uint64_t b1,
+                                        uint64_t b2) {
+   constexpr uint64_t M44 = 0xFFFFFFFFFFF;
+   constexpr uint64_t M42 = 0x3FFFFFFFFFF;
 
-   /* h = 0 */
-   X[3] = 0;
-   X[4] = 0;
-   X[5] = 0;
-
-   /* save pad for later */
-   X[6] = load_le<uint64_t>(key, 2);
-   X[7] = load_le<uint64_t>(key, 3);
-}
-
-void poly1305_blocks(secure_vector<uint64_t>& X, const uint8_t* m, size_t blocks, bool is_final = false) {
 #if !defined(BOTAN_TARGET_HAS_NATIVE_UINT128)
    typedef donna128 uint128_t;
 #endif
 
-   const uint64_t hibit = is_final ? 0 : (static_cast<uint64_t>(1) << 40); /* 1 << 128 */
+   const uint64_t s1 = b1 * 20;
+   const uint64_t s2 = b2 * 20;
 
-   const uint64_t r0 = X[0];
-   const uint64_t r1 = X[1];
-   const uint64_t r2 = X[2];
+   const uint128_t d0 = uint128_t(a0) * b0 + uint128_t(a1) * s2 + uint128_t(a2) * s1;
+   const uint64_t c0 = carry_shift(d0, 44);
 
-   const uint64_t M44 = 0xFFFFFFFFFFF;
-   const uint64_t M42 = 0x3FFFFFFFFFF;
+   const uint128_t d1 = uint128_t(a0) * b1 + uint128_t(a1) * b0 + uint128_t(a2) * s2 + c0;
+   const uint64_t c1 = carry_shift(d1, 44);
 
-   uint64_t h0 = X[3 + 0];
-   uint64_t h1 = X[3 + 1];
-   uint64_t h2 = X[3 + 2];
+   const uint128_t d2 = uint128_t(a0) * b2 + uint128_t(a1) * b1 + uint128_t(a2) * b0 + c1;
+   const uint64_t c2 = carry_shift(d2, 42);
 
+   h0 = (d0 & M44) + c2 * 5;
+   h1 = (d1 & M44) + (h0 >> 44);
+   h0 &= M44;
+   h2 = d2 & M42;
+}
+
+// Extend powers of r from current max to target
+void poly1305_extend_powers(secure_vector<uint64_t>& X, size_t target_powers) {
+   const size_t current_powers = (X.size() - 5) / 3;
+
+   if(current_powers >= target_powers) {
+      return;
+   }
+
+   // Load r^1 for multiplication
+   const uint64_t r0 = X[R_BASE + 0];
+   const uint64_t r1 = X[R_BASE + 1];
+   const uint64_t r2 = X[R_BASE + 2];
+
+   X.resize(5 + target_powers * 3);
+
+   // Compute r^(current+1) through r^target
+   for(size_t i = current_powers + 1; i <= target_powers; ++i) {
+      const size_t offset = R_BASE + (i - 1) * 3;
+      poly1305_mul_44(
+         X[offset + 0], X[offset + 1], X[offset + 2], X[offset - 3], X[offset - 2], X[offset - 1], r0, r1, r2);
+   }
+}
+
+// Initialize Poly1305 state and precompute powers of r
+void poly1305_init(secure_vector<uint64_t>& X, const uint8_t key[32]) {
+   X.clear();
+   X.reserve(2 + 3 + 2 * 3);
+   X.resize(2 + 3 + 3);
+
+   /* Save pad for later (first 2 slots) */
+   X[PAD_BASE + 0] = load_le<uint64_t>(key, 2);
+   X[PAD_BASE + 1] = load_le<uint64_t>(key, 3);
+
+   /* h = 0 (accumulator, next 3 slots) */
+   X[H_BASE + 0] = 0;
+   X[H_BASE + 1] = 0;
+   X[H_BASE + 2] = 0;
+
+   /* r &= 0xffffffc0ffffffc0ffffffc0fffffff (clamping) */
+   const uint64_t t0 = load_le<uint64_t>(key, 0);
+   const uint64_t t1 = load_le<uint64_t>(key, 1);
+
+   const uint64_t r0 = (t0) & 0xffc0fffffff;
+   const uint64_t r1 = ((t0 >> 44) | (t1 << 20)) & 0xfffffc0ffff;
+   const uint64_t r2 = ((t1 >> 24)) & 0x00ffffffc0f;
+
+   // Store r^1
+   X[R_BASE + 0] = r0;
+   X[R_BASE + 1] = r1;
+   X[R_BASE + 2] = r2;
+
+   poly1305_extend_powers(X, 2);
+}
+
+// Process a single block: h = (h + m) * r mod p
+BOTAN_FORCE_INLINE void poly1305_block_single(uint64_t& h0,
+                                              uint64_t& h1,
+                                              uint64_t& h2,
+                                              uint64_t r0,
+                                              uint64_t r1,
+                                              uint64_t r2,
+                                              uint64_t s1,
+                                              uint64_t s2,
+                                              const uint8_t* m,
+                                              uint64_t hibit) {
+   constexpr uint64_t M44 = 0xFFFFFFFFFFF;
+   constexpr uint64_t M42 = 0x3FFFFFFFFFF;
+
+#if !defined(BOTAN_TARGET_HAS_NATIVE_UINT128)
+   typedef donna128 uint128_t;
+#endif
+
+   const uint64_t t0 = load_le<uint64_t>(m, 0);
+   const uint64_t t1 = load_le<uint64_t>(m, 1);
+
+   h0 += (t0 & M44);
+   h1 += ((t0 >> 44) | (t1 << 20)) & M44;
+   h2 += ((t1 >> 24) & M42) | hibit;
+
+   const uint128_t d0 = uint128_t(h0) * r0 + uint128_t(h1) * s2 + uint128_t(h2) * s1;
+   const uint64_t c0 = carry_shift(d0, 44);
+
+   const uint128_t d1 = uint128_t(h0) * r1 + uint128_t(h1) * r0 + uint128_t(h2) * s2 + c0;
+   const uint64_t c1 = carry_shift(d1, 44);
+
+   const uint128_t d2 = uint128_t(h0) * r2 + uint128_t(h1) * r1 + uint128_t(h2) * r0 + c1;
+   const uint64_t c2 = carry_shift(d2, 42);
+
+   h0 = (d0 & M44) + c2 * 5;
+   h1 = (d1 & M44) + (h0 >> 44);
+   h0 &= M44;
+   h2 = d2 & M42;
+}
+
+// Process two blocks in parallel: h = ((h + m0) * r + m1) * r = (h + m0) * r^2 + m1 * r
+// The multiplications by r^2 and r are independent, enabling ILP
+BOTAN_FORCE_INLINE void poly1305_block_pair(uint64_t& h0,
+                                            uint64_t& h1,
+                                            uint64_t& h2,
+                                            uint64_t r0,
+                                            uint64_t r1,
+                                            uint64_t r2,
+                                            uint64_t s1,
+                                            uint64_t s2,
+                                            uint64_t rr0,
+                                            uint64_t rr1,
+                                            uint64_t rr2,
+                                            uint64_t ss1,
+                                            uint64_t ss2,
+                                            const uint8_t* m,
+                                            uint64_t hibit) {
+   constexpr uint64_t M44 = 0xFFFFFFFFFFF;
+   constexpr uint64_t M42 = 0x3FFFFFFFFFF;
+
+#if !defined(BOTAN_TARGET_HAS_NATIVE_UINT128)
+   typedef donna128 uint128_t;
+#endif
+
+   // Load first block (will be multiplied by r^2)
+   const uint64_t m0_t0 = load_le<uint64_t>(m, 0);
+   const uint64_t m0_t1 = load_le<uint64_t>(m, 1);
+
+   // Load second block (will be multiplied by r)
+   const uint64_t m1_t0 = load_le<uint64_t>(m + 16, 0);
+   const uint64_t m1_t1 = load_le<uint64_t>(m + 16, 1);
+
+   // Add first block to h
+   h0 += (m0_t0 & M44);
+   h1 += ((m0_t0 >> 44) | (m0_t1 << 20)) & M44;
+   h2 += ((m0_t1 >> 24) & M42) | hibit;
+
+   // Convert second block to limbs
+   const uint64_t b0 = (m1_t0 & M44);
+   const uint64_t b1 = ((m1_t0 >> 44) | (m1_t1 << 20)) & M44;
+   const uint64_t b2 = ((m1_t1 >> 24) & M42) | hibit;
+
+   // Compute (h + m0) * r^2 + m1 * r
+   const uint128_t d0 = uint128_t(h0) * rr0 + uint128_t(h1) * ss2 + uint128_t(h2) * ss1 + uint128_t(b0) * r0 +
+                        uint128_t(b1) * s2 + uint128_t(b2) * s1;
+   const uint64_t c0 = carry_shift(d0, 44);
+
+   const uint128_t d1 = uint128_t(h0) * rr1 + uint128_t(h1) * rr0 + uint128_t(h2) * ss2 + uint128_t(b0) * r1 +
+                        uint128_t(b1) * r0 + uint128_t(b2) * s2 + c0;
+   const uint64_t c1 = carry_shift(d1, 44);
+
+   const uint128_t d2 = uint128_t(h0) * rr2 + uint128_t(h1) * rr1 + uint128_t(h2) * rr0 + uint128_t(b0) * r2 +
+                        uint128_t(b1) * r1 + uint128_t(b2) * r0 + c1;
+   const uint64_t c2 = carry_shift(d2, 42);
+
+   h0 = (d0 & M44) + c2 * 5;
+   h1 = (d1 & M44) + (h0 >> 44);
+   h0 &= M44;
+   h2 = d2 & M42;
+}
+
+void poly1305_blocks(secure_vector<uint64_t>& X, const uint8_t* m, size_t blocks, bool is_final = false) {
+   const uint64_t hibit = is_final ? 0 : (static_cast<uint64_t>(1) << 40);
+
+   // Load r (at R_BASE + 0)
+   const uint64_t r0 = X[R_BASE + 0];
+   const uint64_t r1 = X[R_BASE + 1];
+   const uint64_t r2 = X[R_BASE + 2];
    const uint64_t s1 = r1 * 20;
    const uint64_t s2 = r2 * 20;
 
-   for(size_t i = 0; i != blocks; ++i) {
-      const uint64_t t0 = load_le<uint64_t>(m, 0);
-      const uint64_t t1 = load_le<uint64_t>(m, 1);
+   // Load r^2 (at R_BASE + 3)
+   const uint64_t rr0 = X[R_BASE + 3];
+   const uint64_t rr1 = X[R_BASE + 4];
+   const uint64_t rr2 = X[R_BASE + 5];
 
-      h0 += ((t0)&M44);
-      h1 += (((t0 >> 44) | (t1 << 20)) & M44);
-      h2 += (((t1 >> 24)) & M42) | hibit;
+   // Precompute
+   const uint64_t ss1 = rr1 * 20;
+   const uint64_t ss2 = rr2 * 20;
 
-      const uint128_t d0 = uint128_t(h0) * r0 + uint128_t(h1) * s2 + uint128_t(h2) * s1;
-      const uint64_t c0 = carry_shift(d0, 44);
+   // Load accumulator
+   uint64_t h0 = X[H_BASE + 0];
+   uint64_t h1 = X[H_BASE + 1];
+   uint64_t h2 = X[H_BASE + 2];
 
-      const uint128_t d1 = uint128_t(h0) * r1 + uint128_t(h1) * r0 + uint128_t(h2) * s2 + c0;
-      const uint64_t c1 = carry_shift(d1, 44);
-
-      const uint128_t d2 = uint128_t(h0) * r2 + uint128_t(h1) * r1 + uint128_t(h2) * r0 + c1;
-      const uint64_t c2 = carry_shift(d2, 42);
-
-      h0 = d0 & M44;
-      h1 = d1 & M44;
-      h2 = d2 & M42;
-
-      h0 += c2 * 5;
-      h1 += h0 >> 44;
-      h0 = h0 & M44;
-
-      m += 16;
+   while(blocks >= 2) {
+      poly1305_block_pair(h0, h1, h2, r0, r1, r2, s1, s2, rr0, rr1, rr2, ss1, ss2, m, hibit);
+      m += 32;
+      blocks -= 2;
    }
 
-   X[3 + 0] = h0;
-   X[3 + 1] = h1;
-   X[3 + 2] = h2;
+   // Final block?
+   if(blocks > 0) {
+      poly1305_block_single(h0, h1, h2, r0, r1, r2, s1, s2, m, hibit);
+   }
+
+   // Store accumulator
+   X[H_BASE + 0] = h0;
+   X[H_BASE + 1] = h1;
+   X[H_BASE + 2] = h2;
 }
 
 void poly1305_finish(secure_vector<uint64_t>& X, uint8_t mac[16]) {
-   const uint64_t M44 = 0xFFFFFFFFFFF;
-   const uint64_t M42 = 0x3FFFFFFFFFF;
+   constexpr uint64_t M44 = 0xFFFFFFFFFFF;
+   constexpr uint64_t M42 = 0x3FFFFFFFFFF;
 
    /* fully carry h */
-   uint64_t h0 = X[3 + 0];
-   uint64_t h1 = X[3 + 1];
-   uint64_t h2 = X[3 + 2];
+   uint64_t h0 = X[H_BASE + 0];
+   uint64_t h1 = X[H_BASE + 1];
+   uint64_t h2 = X[H_BASE + 2];
 
    uint64_t c = (h1 >> 44);
    h1 &= M44;
@@ -34460,7 +35661,7 @@ void poly1305_finish(secure_vector<uint64_t>& X, uint8_t mac[16]) {
    uint64_t g1 = h1 + c;
    c = (g1 >> 44);
    g1 &= M44;
-   uint64_t g2 = h2 + c - (static_cast<uint64_t>(1) << 42);
+   const uint64_t g2 = h2 + c - (static_cast<uint64_t>(1) << 42);
 
    /* select h if h < p, or h + -p if h >= p */
    const auto c_mask = CT::Mask<uint64_t>::expand(c);
@@ -34469,8 +35670,8 @@ void poly1305_finish(secure_vector<uint64_t>& X, uint8_t mac[16]) {
    h2 = c_mask.select(g2, h2);
 
    /* h = (h + pad) */
-   const uint64_t t0 = X[6];
-   const uint64_t t1 = X[7];
+   const uint64_t t0 = X[PAD_BASE + 0];
+   const uint64_t t1 = X[PAD_BASE + 1];
 
    h0 += ((t0)&M44);
    c = (h0 >> 44);
@@ -34499,14 +35700,30 @@ void Poly1305::clear() {
 }
 
 bool Poly1305::has_keying_material() const {
-   return m_poly.size() == 8;
+   // Minimum size: pad(2) + accum(3) + r(3) + r^2(3) = 11
+   return m_poly.size() >= 11;
 }
 
 void Poly1305::key_schedule(std::span<const uint8_t> key) {
    m_buffer.clear();
-   m_poly.resize(8);
 
    poly1305_init(m_poly, key.data());
+}
+
+std::string Poly1305::provider() const {
+#if defined(BOTAN_HAS_POLY1305_AVX512)
+   if(auto feat = CPUID::check(CPUID::Feature::AVX512)) {
+      return *feat;
+   }
+#endif
+
+#if defined(BOTAN_HAS_POLY1305_AVX2)
+   if(auto feat = CPUID::check(CPUID::Feature::AVX2)) {
+      return *feat;
+   }
+#endif
+
+   return "base";
 }
 
 void Poly1305::add_data(std::span<const uint8_t> input) {
@@ -34522,7 +35739,32 @@ void Poly1305::add_data(std::span<const uint8_t> input) {
       if(m_buffer.in_alignment()) {
          const auto [aligned_data, full_blocks] = m_buffer.aligned_data_to_process(in);
          if(full_blocks > 0) {
-            poly1305_blocks(m_poly, aligned_data.data(), full_blocks);
+            const uint8_t* data_ptr = aligned_data.data();
+            size_t blocks_remaining = full_blocks;
+
+#if defined(BOTAN_HAS_POLY1305_AVX512)
+            if(blocks_remaining >= 8 * 3 && CPUID::has(CPUID::Feature::AVX512)) {
+               // Lazily compute r^3 through r^8 on first AVX512 use
+               poly1305_extend_powers(m_poly, 8);
+               const size_t processed = poly1305_avx512_blocks(m_poly, data_ptr, blocks_remaining);
+               data_ptr += processed * 16;
+               blocks_remaining -= processed;
+            }
+#endif
+
+#if defined(BOTAN_HAS_POLY1305_AVX2)
+            if(blocks_remaining >= 4 * 6 && CPUID::has(CPUID::Feature::AVX2)) {
+               // Lazily compute r^3 and r^4 on first AVX2 use
+               poly1305_extend_powers(m_poly, 4);
+               const size_t processed = poly1305_avx2_blocks(m_poly, data_ptr, blocks_remaining);
+               data_ptr += processed * 16;
+               blocks_remaining -= processed;
+            }
+#endif
+
+            if(blocks_remaining > 0) {
+               poly1305_blocks(m_poly, data_ptr, blocks_remaining);
+            }
          }
       }
    }
@@ -34570,6 +35812,9 @@ void Poly1305::final_result(std::span<uint8_t> out) {
 #endif
 
 #if defined(BOTAN_HAS_ECC_PUBLIC_KEY_CRYPTO)
+#endif
+
+#if defined(BOTAN_HAS_ECC_GROUP)
 #endif
 
 #if defined(BOTAN_HAS_ECDSA)
@@ -34641,7 +35886,7 @@ std::unique_ptr<Public_Key> load_public_key(const AlgorithmIdentifier& alg_id,
                                             [[maybe_unused]] std::span<const uint8_t> key_bits) {
    const std::string oid_str = alg_id.oid().to_formatted_string();
    const std::vector<std::string> alg_info = split_on(oid_str, '/');
-   std::string_view alg_name = alg_info[0];
+   const std::string_view alg_name = alg_info[0];
 
 #if defined(BOTAN_HAS_RSA)
    if(alg_name == "RSA") {
@@ -34800,7 +36045,7 @@ std::unique_ptr<Private_Key> load_private_key(const AlgorithmIdentifier& alg_id,
                                               [[maybe_unused]] std::span<const uint8_t> key_bits) {
    const std::string oid_str = alg_id.oid().to_formatted_string();
    const std::vector<std::string> alg_info = split_on(oid_str, '/');
-   std::string_view alg_name = alg_info[0];
+   const std::string_view alg_name = alg_info[0];
 
 #if defined(BOTAN_HAS_RSA)
    if(alg_name == "RSA") {
@@ -35489,7 +36734,7 @@ std::unique_ptr<HashFunction> create_signature_hash(std::string_view padding) {
       return hash;
    }
 
-   SCAN_Name req(padding);
+   const SCAN_Name req(padding);
 
    if(req.algo_name() == "EMSA1" && req.arg_count() == 1) {
       if(auto hash = HashFunction::create(req.arg(0))) {
@@ -35791,7 +37036,7 @@ std::pair<std::string, std::string> choose_pbe_params(std::string_view pbe_algo,
       return std::make_pair("AES-256/CBC", "SHA-256");
    }
 
-   SCAN_Name request(pbe_algo);
+   const SCAN_Name request(pbe_algo);
 
    if(request.arg_count() != 2 || (request.algo_name() != "PBE-PKCS5v20" && request.algo_name() != "PBES2")) {
       throw Invalid_Argument(fmt("Unsupported PBE '{}'", pbe_algo));
@@ -36302,9 +37547,9 @@ size_t PK_Signer::signature_length() const {
    if(m_sig_format == Signature_Format::Standard) {
       return m_op->signature_length();
    } else if(m_sig_format == Signature_Format::DerSequence) {
-      size_t sig_len = m_op->signature_length();
+      const size_t sig_len = m_op->signature_length();
 
-      size_t der_overhead = [sig_len]() {
+      const size_t der_overhead = [sig_len]() {
          /*
          This was computed by DER encoding of some maximal value signatures
          (since DER is variable length)
@@ -36415,29 +37660,40 @@ void PK_Verifier::update(const uint8_t in[], size_t length) {
 
 namespace {
 
-std::vector<uint8_t> decode_der_signature(const uint8_t sig[], size_t length, size_t sig_parts, size_t sig_part_size) {
+std::vector<uint8_t> decode_der_signature_pair(const uint8_t sig[], size_t length, size_t sig_part_size) {
+   BOTAN_ASSERT_NOMSG(sig_part_size > 0);
+
    std::vector<uint8_t> real_sig;
+   real_sig.reserve(2 * sig_part_size);
+
    BER_Decoder decoder(sig, length);
    BER_Decoder ber_sig = decoder.start_sequence();
-
-   BOTAN_ASSERT_NOMSG(sig_parts != 0 && sig_part_size != 0);
 
    size_t count = 0;
 
    while(ber_sig.more_items()) {
+      if(count >= 2) {
+         throw Decoding_Error("PK_Verifier: signature size invalid");
+      }
+
+      // TODO should be able to just get the integer bytes directly
+      // from BER_Decoder without using BigInt here
       BigInt sig_part;
       ber_sig.decode(sig_part);
+      if(sig_part.bytes() > sig_part_size) {
+         throw Decoding_Error("PK_Verifier: signature size invalid");
+      }
       real_sig += sig_part.serialize(sig_part_size);
       ++count;
    }
 
-   if(count != sig_parts) {
+   if(count != 2) {
       throw Decoding_Error("PK_Verifier: signature size invalid");
    }
 
-   const std::vector<uint8_t> reencoded = der_encode_signature(real_sig, sig_parts, sig_part_size);
+   const std::vector<uint8_t> reencoded = der_encode_signature(real_sig, 2, sig_part_size);
 
-   if(reencoded.size() != length || CT::is_equal(reencoded.data(), sig, reencoded.size()).as_bool() == false) {
+   if(!CT::is_equal<uint8_t>(reencoded, std::span{sig, length}).as_bool()) {
       throw Decoding_Error("PK_Verifier: signature is not the canonical DER encoding");
    }
    return real_sig;
@@ -36456,11 +37712,13 @@ bool PK_Verifier::check_signature(const uint8_t sig[], size_t length) {
          BOTAN_ASSERT_NOMSG(m_sig_element_size.has_value());
 
          try {
-            real_sig = decode_der_signature(sig, length, 2, m_sig_element_size.value());
+            real_sig = decode_der_signature_pair(sig, length, m_sig_element_size.value());
             decoding_success = true;
-         } catch(Decoding_Error&) {}
+         } catch(...) {}
 
-         bool accept = m_op->is_valid_signature(real_sig);
+         // It is critical that is_valid_signature is called even if DER decoding failed, since
+         // that is what resets the internal state (message hashes, etc)
+         const bool accept = m_op->is_valid_signature(real_sig);
 
          return accept && decoding_success;
       } else {
@@ -36478,10 +37736,11 @@ bool PK_Verifier::check_signature(const uint8_t sig[], size_t length) {
 }  // namespace Botan
 /*
 * Public Key Work Factor Functions
-* (C) 1999-2007,2012 Jack Lloyd
+* (C) 1999-2007,2012,2026 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
+
 
 #include <cmath>
 #include <numbers>
@@ -36525,26 +37784,54 @@ size_t dl_work_factor(size_t bits) {
    return if_work_factor(bits);
 }
 
-size_t dl_exponent_size(size_t bits) {
-   if(bits == 0) {
-      return 0;
-   }
-   if(bits <= 256) {
-      return bits - 1;
-   }
-   if(bits <= 1024) {
+size_t dl_exponent_size(size_t p_bits) {
+   BOTAN_ARG_CHECK(p_bits > 1, "Invalid prime length");
+
+   /*
+   For relevant sizes we follow the suggestions in
+   NIST SP 800-56B Rev 2 Appendix D
+   "Maximum Security Strength Estimates for IFC Modulus Lengths"
+
+   For sizes outside the range considered in the SP we use some sensible values
+
+   Note that we return twice the value given in Table 4 since we are choosing
+   the exponent size as twice the estimated security strength.
+
+   See also NIST SP 800-56A Rev 3 Appendix D, Tables 25 and 26
+   */
+
+   if(p_bits <= 256) {
+      /*
+      * For stupidly small groups we might return a value larger than the group
+      * size if we fell into the conditionals below. Just use the maximum
+      * possible exponent size - for all the good it will do you with a group
+      * this weak.
+      */
+      return p_bits - 1;
+   } else if(p_bits <= 1024) {
+      /*
+      Not in the SP, but general estimates are that a 1024 bit group provides at
+      most 80 bits security, so using an exponent appropriate for 96 bit security
+      is more than sufficient.
+      */
       return 192;
+   } else if(p_bits <= 2048) {
+      return 224;  // SP 800-56B
+   } else if(p_bits <= 3072) {
+      return 256;  // SP 800-56B
+   } else if(p_bits <= 4096) {
+      return 304;  // SP 800-56B
+   } else if(p_bits <= 6144) {
+      return 352;  // SP 800-56B
+   } else if(p_bits <= 8192) {
+      return 400;  // SP 800-56B
+   } else {
+      // For values larger than we know about, just saturate to 256 bit security
+      // which is Good Enough for FFDH
+      //
+      // NIST puts 15360 bit groups at exactly 256 bits security
+      return 512;
    }
-   if(bits <= 1536) {
-      return 224;
-   }
-   if(bits <= 2048) {
-      return 256;
-   }
-   if(bits <= 4096) {
-      return 384;
-   }
-   return 512;
 }
 
 }  // namespace Botan
@@ -36637,12 +37924,12 @@ void RandomNumberGenerator::randomize_with_ts_input(std::span<uint8_t> output) {
    }
 }
 
-size_t RandomNumberGenerator::reseed(Entropy_Sources& srcs, size_t poll_bits, std::chrono::milliseconds poll_timeout) {
+size_t RandomNumberGenerator::reseed_from_sources(Entropy_Sources& srcs, size_t poll_bits) {
    if(this->accepts_input()) {
 #if defined(BOTAN_HAS_ENTROPY_SOURCE)
-      return srcs.poll(*this, poll_bits, poll_timeout);
+      return srcs.poll(*this, poll_bits);
 #else
-      BOTAN_UNUSED(srcs, poll_bits, poll_timeout);
+      BOTAN_UNUSED(srcs, poll_bits);
 #endif
    }
 
@@ -38013,24 +39300,24 @@ void SHAKE_XOF::generate_bytes(std::span<uint8_t> output) {
 namespace Botan {
 
 void Stateful_RNG::clear() {
-   lock_guard_type<recursive_mutex_type> lock(m_mutex);
+   const lock_guard_type<recursive_mutex_type> lock(m_mutex);
    m_reseed_counter = 0;
    m_last_pid = 0;
    clear_state();
 }
 
 void Stateful_RNG::force_reseed() {
-   lock_guard_type<recursive_mutex_type> lock(m_mutex);
+   const lock_guard_type<recursive_mutex_type> lock(m_mutex);
    m_reseed_counter = 0;
 }
 
 bool Stateful_RNG::is_seeded() const {
-   lock_guard_type<recursive_mutex_type> lock(m_mutex);
+   const lock_guard_type<recursive_mutex_type> lock(m_mutex);
    return m_reseed_counter > 0;
 }
 
 void Stateful_RNG::initialize_with(std::span<const uint8_t> input) {
-   lock_guard_type<recursive_mutex_type> lock(m_mutex);
+   const lock_guard_type<recursive_mutex_type> lock(m_mutex);
 
    clear();
    add_entropy(input);
@@ -38061,7 +39348,7 @@ void Stateful_RNG::generate_batched_output(std::span<uint8_t> output, std::span<
 }
 
 void Stateful_RNG::fill_bytes_with_input(std::span<uint8_t> output, std::span<const uint8_t> input) {
-   lock_guard_type<recursive_mutex_type> lock(m_mutex);
+   const lock_guard_type<recursive_mutex_type> lock(m_mutex);
 
    if(output.empty()) {
       // Special case for exclusively adding entropy to the stateful RNG.
@@ -38075,10 +39362,10 @@ void Stateful_RNG::fill_bytes_with_input(std::span<uint8_t> output, std::span<co
    }
 }
 
-size_t Stateful_RNG::reseed(Entropy_Sources& srcs, size_t poll_bits, std::chrono::milliseconds poll_timeout) {
-   lock_guard_type<recursive_mutex_type> lock(m_mutex);
+size_t Stateful_RNG::reseed_from_sources(Entropy_Sources& srcs, size_t poll_bits) {
+   const lock_guard_type<recursive_mutex_type> lock(m_mutex);
 
-   const size_t bits_collected = RandomNumberGenerator::reseed(srcs, poll_bits, poll_timeout);
+   const size_t bits_collected = RandomNumberGenerator::reseed_from_sources(srcs, poll_bits);
 
    if(bits_collected >= security_level()) {
       reset_reseed_counter();
@@ -38088,7 +39375,7 @@ size_t Stateful_RNG::reseed(Entropy_Sources& srcs, size_t poll_bits, std::chrono
 }
 
 void Stateful_RNG::reseed_from_rng(RandomNumberGenerator& rng, size_t poll_bits) {
-   lock_guard_type<recursive_mutex_type> lock(m_mutex);
+   const lock_guard_type<recursive_mutex_type> lock(m_mutex);
 
    RandomNumberGenerator::reseed_from_rng(rng, poll_bits);
 
@@ -38118,7 +39405,7 @@ void Stateful_RNG::reseed_check() {
       }
 
       if(m_entropy_sources != nullptr) {
-         reseed(*m_entropy_sources, security_level());
+         reseed_from_sources(*m_entropy_sources, security_level());
       }
 
       if(!is_seeded()) {
@@ -38202,7 +39489,7 @@ std::unique_ptr<StreamCipher> StreamCipher::create(std::string_view algo_spec, s
       if(provider.empty() || provider == "base") {
          auto cipher = BlockCipher::create(req.arg(0));
          if(cipher) {
-            size_t ctr_size = req.arg_as_integer(1, cipher->block_size());
+            const size_t ctr_size = req.arg_as_integer(1, cipher->block_size());
             return std::make_unique<CTR_BE>(std::move(cipher), ctr_size);
          }
       }
@@ -38669,6 +39956,7 @@ BOTAN_MALLOC_FN void* allocate_memory(size_t elems, size_t elem_size) {
    }
 
 #if defined(BOTAN_HAS_LOCKING_ALLOCATOR)
+   // NOLINTNEXTLINE(*-const-correctness) bug in clang-tidy
    if(void* p = mlock_allocator::instance().allocate(elems, elem_size)) {
       return p;
    }
@@ -38677,6 +39965,7 @@ BOTAN_MALLOC_FN void* allocate_memory(size_t elems, size_t elem_size) {
 #if defined(BOTAN_TARGET_OS_HAS_ALLOC_CONCEAL)
    void* ptr = ::calloc_conceal(elems, elem_size);
 #else
+   // NOLINTNEXTLINE(*-const-correctness) bug in clang-tidy
    void* ptr = std::calloc(elems, elem_size);  // NOLINT(*-no-malloc,*-owning-memory)
 #endif
    if(ptr == nullptr) {
@@ -38729,6 +40018,11 @@ void throw_invalid_argument(const char* message, const char* func, const char* f
 
 void throw_invalid_state(const char* expr, const char* func, const char* file) {
    throw Invalid_State(fmt("Invalid state: expr {} was false in {}:{}", expr, func, file));
+}
+
+// Declared in concepts.h
+void ranges::memory_region_size_violation() {
+   throw Invalid_Argument("Memory regions did not have expected byte lengths");
 }
 
 void assertion_failure(const char* expr_str, const char* assertion_made, const char* func, const char* file, int line) {
@@ -38853,7 +40147,7 @@ std::string calendar_point::to_string() const {
 }
 
 calendar_point::calendar_point(const std::chrono::system_clock::time_point& time_point) {
-   std::tm tm = do_gmtime(std::chrono::system_clock::to_time_t(time_point));
+   const std::tm tm = do_gmtime(std::chrono::system_clock::to_time_t(time_point));
 
    m_year = tm.tm_year + 1900;
    m_month = tm.tm_mon + 1;
@@ -38911,6 +40205,58 @@ void append_utf8_for(std::string& s, uint32_t c) {
    }
 }
 
+uint32_t next_utf8_codepoint(const std::string& utf8, size_t& pos) {
+   auto read_continuation = [&]() -> uint32_t {
+      if(pos >= utf8.size()) {
+         throw Decoding_Error("Invalid UTF-8 sequence");
+      }
+      const uint8_t b = static_cast<uint8_t>(utf8[pos++]);
+      if((b & 0xC0) != 0x80) {
+         throw Decoding_Error("Invalid UTF-8 sequence");
+      }
+      return b & 0x3F;
+   };
+
+   const uint8_t lead = static_cast<uint8_t>(utf8[pos++]);
+   uint32_t c = 0;
+
+   if(lead <= 0x7F) {
+      c = lead;
+   } else if((lead & 0xE0) == 0xC0) {
+      c = (lead & 0x1F) << 6;
+      c |= read_continuation();
+      if(c < 0x80) {
+         throw Decoding_Error("Overlong UTF-8 sequence");
+      }
+   } else if((lead & 0xF0) == 0xE0) {
+      c = (lead & 0x0F) << 12;
+      c |= read_continuation() << 6;
+      c |= read_continuation();
+      if(c < 0x800) {
+         throw Decoding_Error("Overlong UTF-8 sequence");
+      }
+   } else if((lead & 0xF8) == 0xF0) {
+      c = (lead & 0x07) << 18;
+      c |= read_continuation() << 12;
+      c |= read_continuation() << 6;
+      c |= read_continuation();
+      if(c < 0x10000) {
+         throw Decoding_Error("Overlong UTF-8 sequence");
+      }
+   } else {
+      throw Decoding_Error("Invalid UTF-8 sequence");
+   }
+
+   if(c > 0x10FFFF) {
+      throw Decoding_Error("UTF-8 sequence encodes value outside Unicode range");
+   }
+   if(c >= 0xD800 && c < 0xE000) {
+      throw Decoding_Error("UTF-8 sequence encodes surrogate code point");
+   }
+
+   return c;
+}
+
 }  // namespace
 
 std::string ucs2_to_utf8(const uint8_t ucs2[], size_t len) {
@@ -38929,6 +40275,24 @@ std::string ucs2_to_utf8(const uint8_t ucs2[], size_t len) {
    return s;
 }
 
+std::vector<uint8_t> utf8_to_ucs2(const std::string& utf8) {
+   std::vector<uint8_t> out;
+   out.reserve(utf8.size() * 2);
+
+   size_t pos = 0;
+   while(pos < utf8.size()) {
+      const uint32_t c = next_utf8_codepoint(utf8, pos);
+      if(c > 0xFFFF) {
+         throw Decoding_Error("Cannot encode character in UCS-2");
+      }
+      const uint16_t val = static_cast<uint16_t>(c);
+      out.push_back(get_byte<0>(val));
+      out.push_back(get_byte<1>(val));
+   }
+
+   return out;
+}
+
 std::string ucs4_to_utf8(const uint8_t ucs4[], size_t len) {
    if(len % 4 != 0) {
       throw Decoding_Error("Invalid length for UCS-4 string");
@@ -38943,6 +40307,22 @@ std::string ucs4_to_utf8(const uint8_t ucs4[], size_t len) {
    }
 
    return s;
+}
+
+std::vector<uint8_t> utf8_to_ucs4(const std::string& utf8) {
+   std::vector<uint8_t> out;
+   out.reserve(utf8.size() * 4);
+
+   size_t pos = 0;
+   while(pos < utf8.size()) {
+      const uint32_t val = next_utf8_codepoint(utf8, pos);
+      out.push_back(get_byte<0>(val));
+      out.push_back(get_byte<1>(val));
+      out.push_back(get_byte<2>(val));
+      out.push_back(get_byte<3>(val));
+   }
+
+   return out;
 }
 
 /*
@@ -38969,7 +40349,7 @@ std::string format_char_for_display(char c) {
    } else if(c == '\r') {
       oss << "\\r";
    } else if(static_cast<unsigned char>(c) >= 128) {
-      unsigned char z = static_cast<unsigned char>(c);
+      const unsigned char z = static_cast<unsigned char>(c);
       oss << "\\x" << std::hex << std::uppercase << static_cast<int>(z);
    } else {
       oss << c;
@@ -39065,7 +40445,7 @@ CT::Option<size_t> CT::copy_output(CT::Choice accept,
 size_t CT::count_leading_zero_bytes(std::span<const uint8_t> input) {
    size_t leading_zeros = 0;
    auto only_zeros = Mask<uint8_t>::set();
-   for(uint8_t b : input) {
+   for(const uint8_t b : input) {
       only_zeros &= CT::Mask<uint8_t>::is_zero(b);
       leading_zeros += only_zeros.if_set_return(1);
    }
@@ -39465,7 +40845,7 @@ std::vector<std::string> impl_readdir(std::string_view dir_path) {
       const std::string cur_path = dir_list[0];
       dir_list.pop_front();
 
-      std::unique_ptr<DIR, std::function<int(DIR*)>> dir(::opendir(cur_path.c_str()), ::closedir);
+      const std::unique_ptr<DIR, std::function<int(DIR*)>> dir(::opendir(cur_path.c_str()), ::closedir);
 
       if(dir) {
          while(struct dirent* dirent = ::readdir(dir.get())) {
@@ -39606,6 +40986,14 @@ bool constant_time_compare(std::span<const uint8_t> x, std::span<const uint8_t> 
 namespace Botan {
 
 void secure_scrub_memory(void* ptr, size_t n) {
+   return secure_zeroize_buffer(ptr, n);
+}
+
+void secure_zeroize_buffer(void* ptr, size_t n) {
+   if(n == 0) {
+      return;
+   }
+
 #if defined(BOTAN_TARGET_OS_HAS_RTLSECUREZEROMEMORY)
    ::RtlSecureZeroMemory(ptr, n);
 
@@ -39687,12 +41075,12 @@ uint32_t to_u32bit(std::string_view str_view) {
 /*
 * Parse a SCAN-style algorithm name
 */
-std::vector<std::string> parse_algorithm_name(std::string_view namex) {
-   if(namex.find('(') == std::string::npos && namex.find(')') == std::string::npos) {
-      return {std::string(namex)};
+std::vector<std::string> parse_algorithm_name(std::string_view scan_name) {
+   if(scan_name.find('(') == std::string::npos && scan_name.find(')') == std::string::npos) {
+      return {std::string(scan_name)};
    }
 
-   std::string name(namex);
+   std::string name(scan_name);
    std::string substring;
    std::vector<std::string> elems;
    size_t level = 0;
@@ -39701,7 +41089,7 @@ std::vector<std::string> parse_algorithm_name(std::string_view namex) {
    name = name.substr(name.find('('));
 
    for(auto i = name.begin(); i != name.end(); ++i) {
-      char c = *i;
+      const char c = *i;
 
       if(c == '(') {
          ++level;
@@ -39717,7 +41105,7 @@ std::vector<std::string> parse_algorithm_name(std::string_view namex) {
          }
 
          if(level == 0 || (level == 1 && i != name.end() - 1)) {
-            throw Invalid_Algorithm_Name(namex);
+            throw Invalid_Algorithm_Name(scan_name);
          }
          --level;
       }
@@ -39735,7 +41123,7 @@ std::vector<std::string> parse_algorithm_name(std::string_view namex) {
    }
 
    if(!substring.empty()) {
-      throw Invalid_Algorithm_Name(namex);
+      throw Invalid_Algorithm_Name(scan_name);
    }
 
    return elems;
@@ -39748,7 +41136,7 @@ std::vector<std::string> split_on(std::string_view str, char delim) {
    }
 
    std::string substr;
-   for(char c : str) {
+   for(const char c : str) {
       if(c == delim) {
          if(!substr.empty()) {
             elems.push_back(substr);
@@ -39802,7 +41190,7 @@ std::optional<uint32_t> string_to_ipv4(std::string_view str) {
    // # of digits pushed to accum since last dot
    size_t cur_digits = 0;
 
-   for(char c : str) {
+   for(const char c : str) {
       if(c == '.') {
          // . without preceding digit is invalid
          if(cur_digits == 0) {
@@ -39871,15 +41259,15 @@ std::string ipv4_to_string(uint32_t ip) {
    return str;
 }
 
-std::string tolower_string(std::string_view in) {
-   std::string s(in);
-   for(char& c : s) {
+std::string tolower_string(std::string_view str) {
+   std::string lower(str);
+   for(char& c : lower) {
       const int cu = static_cast<unsigned char>(c);
       if(std::isalpha(cu) != 0) {
          c = static_cast<char>(std::tolower(cu));
       }
    }
-   return s;
+   return lower;
 }
 
 bool host_wildcard_match(std::string_view issued_, std::string_view host_) {
@@ -40035,7 +41423,7 @@ std::string check_and_canonicalize_dns_name(std::string_view name) {
    size_t current_label_length = 0;
 
    for(size_t i = 0; i != name.size(); ++i) {
-      char c = name[i];
+      const char c = name[i];
 
       if(c == '.') {
          if(i > 0 && name[i - 1] == '.') {
@@ -40220,7 +41608,7 @@ std::map<std::string, std::string> read_kv(std::string_view kv) {
    std::string cur_key;
    std::string cur_val;
 
-   for(char c : kv) {
+   for(const char c : kv) {
       if(c == '\\' && !escaped) {
          escaped = true;
       } else if(c == ',' && !escaped) {
@@ -40333,7 +41721,7 @@ SCAN_Name::SCAN_Name(std::string_view algo_spec) : m_orig_algo_spec(algo_spec) {
 
    const std::string decoding_error = "Bad SCAN name '" + m_orig_algo_spec + "': ";
 
-   for(char c : algo_spec) {
+   for(const char c : algo_spec) {
       if(c == '/' || c == ',' || c == '(' || c == ')') {
          if(c == '(') {
             ++level;
@@ -40670,7 +42058,7 @@ inline void fsquare(uint64_t out[5], const uint64_t in[5], size_t count = 1) {
       const uint64_t d419 = r4 * 19;
       const uint64_t d4 = d419 * 2;
 
-      uint128_t t0 = uint128_t(r0) * r0 + uint128_t(d4) * r1 + uint128_t(d2) * (r3);
+      const uint128_t t0 = uint128_t(r0) * r0 + uint128_t(d4) * r1 + uint128_t(d2) * (r3);
       uint128_t t1 = uint128_t(d0) * r1 + uint128_t(d4) * r2 + uint128_t(r3) * (r3 * 19);
       uint128_t t2 = uint128_t(d0) * r2 + uint128_t(r1) * r1 + uint128_t(d4) * (r3);
       uint128_t t3 = uint128_t(d0) * r3 + uint128_t(d1) * r2 + uint128_t(r4) * (d419);
@@ -41220,7 +42608,7 @@ class X448_KA_Operation final : public PK_Ops::Key_Agreement_with_KDF {
       secure_vector<uint8_t> raw_agree(const uint8_t w_data[], size_t w_len) override {
          auto scope = CT::scoped_poison(m_sk);
 
-         std::span<const uint8_t> w(w_data, w_len);
+         const std::span<const uint8_t> w(w_data, w_len);
          BOTAN_ARG_CHECK(w.size() == X448_LEN, "Invalid size for X448 private key");
          BOTAN_ASSERT_NOMSG(m_sk.size() == X448_LEN);
          const auto k = decode_scalar(m_sk);
@@ -41307,9 +42695,7 @@ Point448 x448_basepoint(const ScalarX448& k) {
 // Algorithm see RFC 7748, Section 5:
 // https://datatracker.ietf.org/doc/html/rfc7748#section-5
 Point448 x448(const ScalarX448& k, const Point448& u) {
-   const auto a24 = Gf448Elem(39081);
-
-   Gf448Elem x_1 = Gf448Elem(u.get());
+   const Gf448Elem x_1 = Gf448Elem(u.get());
    Gf448Elem x_2 = Gf448Elem::one();
    Gf448Elem z_2 = Gf448Elem::zero();
    Gf448Elem x_3 = Gf448Elem(u.get());
@@ -41320,8 +42706,8 @@ Point448 x448(const ScalarX448& k, const Point448& u) {
       auto k_t = CT::Mask<uint64_t>::expand(get_bit(k, t));
       swap ^= k_t;
 
-      x_2.ct_cond_swap(swap.as_bool(), x_3);
-      z_2.ct_cond_swap(swap.as_bool(), z_3);
+      x_2.ct_cond_swap(swap, x_3);
+      z_2.ct_cond_swap(swap, z_3);
       swap = k_t;
 
       const auto A = x_2 + z_2;
@@ -41336,11 +42722,11 @@ Point448 x448(const ScalarX448& k, const Point448& u) {
       x_3 = square(DA + CB);
       z_3 = x_1 * square(DA - CB);
       x_2 = AA * BB;
-      z_2 = E * (AA + a24 * E);
+      z_2 = E * (AA + mul_a24(E));
    }
 
-   x_2.ct_cond_swap(swap.as_bool(), x_3);
-   z_2.ct_cond_swap(swap.as_bool(), z_3);
+   x_2.ct_cond_swap(swap, x_3);
+   z_2.ct_cond_swap(swap, z_3);
 
    const auto res = x_2 / z_2;
 

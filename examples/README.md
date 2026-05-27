@@ -544,5 +544,5 @@ cmake -B build -S . -G Ninja -DCMAKE_CXX_COMPILER=clang++-18
 
 **Version**: NoisePQC++ v0.9.0
 **Last Updated**: 2026-04-25
-**Botan Version**: 3.10.0
+**Botan Version**: 3.11.1
 **Catch2 Version**: 3.11.0

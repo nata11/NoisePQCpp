@@ -39,7 +39,7 @@ This document provides detailed build instructions for NoisePQC++ across differe
 **Important**:
 - C++ modules require the Ninja generator. The Unix Makefiles generator is not supported.
 - On first CMake run, Catch2 and Google Benchmark (when `NOISEPQC_BUILD_BENCHMARKS` is set to `ON`, the default) will be automatically downloaded if not found system-wide.
-- Botan 3.10.0 minimized build source is provided for macOS (x86_64, ARM64), Linux (x86_64, ARM64), and Windows (x86_64).
+- Botan 3.11.1 minimized build source is provided for macOS (x86_64, ARM64), Linux (x86_64, ARM64), and Windows (x86_64).
 
 ## Platform-Specific Instructions
 

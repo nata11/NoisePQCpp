@@ -49,7 +49,7 @@ At a high level, the implementation separates cryptographic primitives (DH/KEM, 
 ├─────────────────────────────────────────────────────────────────┤
 │                  External Cryptographic Library                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │                    Botan 3.10.0                            │  │
+│  │                    Botan 3.11.1                            │  │
 │  └───────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -518,7 +518,7 @@ Networking Examples
 - Ninja (required for C++ modules)
 - Clang 18+ or GCC 15.2+ or MSVC 19.44+
 
-**Platform-Specific Botan 3.10.0 Builds**:
+**Platform-Specific Botan 3.11.1 Builds**:
 Minimized build source included for:
 - macOS (x86_64, ARM64) with Clang 18
 - Linux (x86_64, ARM64) with Clang 18 and GCC 15.2

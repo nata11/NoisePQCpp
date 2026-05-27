@@ -7,7 +7,7 @@ All notable changes to NoisePQC++ will be documented in this file.
 First public release of NoisePQC++.
 
 ### Cryptographic Primitives
-- **Cipher**: ChaCha20-Poly1305 and AES-256-GCM AEAD via Botan 3.10.0
+- **Cipher**: ChaCha20-Poly1305 and AES-256-GCM AEAD via Botan 3.11.1
 - **Hash**: SHA-256, SHA-512, BLAKE2b, BLAKE2s with one-shot and incremental modes
 - **DH**: X25519 and X448 key exchange
 - **KEM**: ML-KEM-512, ML-KEM-768, ML-KEM-1024 (CRYSTALS-Kyber) post-quantum key encapsulation
@@ -45,7 +45,7 @@ First public release of NoisePQC++.
 
 ### Build System
 - C++23 modules with CMake 4.0+ and Ninja / MSBuild (Windows)
-- Botan 3.10.0 minimized build source included for all supported platforms
+- Botan 3.11.1 minimized build source included for all supported platforms
 - Multi-config build support (Debug/Release)
 
 ### Container Images
