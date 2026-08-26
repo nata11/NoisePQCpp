@@ -1,7 +1,7 @@
 # Noise Protocol Patterns Reference
 
 **Version**: 0.9.0
-**Last Updated**: 2026-04-25
+**Last Updated**: 2026-08-26
 
 ## Overview
 This document lists all Noise Protocol patterns implemented in NoisePQC++, including:
@@ -98,13 +98,15 @@ Two or three message patterns for full interactive handshakes.
 | Quantum resistance (pure PQ) | **pqXX**, **pqIK**, **pqNK** (KEM-only) |
 | Quantum + classical safety | **XXhfs**, **IKhfs**, **NKhfs** (DH + KEM hybrid) |
 
-### By Message Count
+### By Message Count (classical patterns)
 
 | Messages | Patterns |
 |----------|----------|
 | 1 | **N**, **K**, **X** |
 | 2 | **NN**, **NK**, **KN**, **KK**, **NX**, **KX**, **IN**, **IK**, **IX** |
 | 3 | **XN**, **XK**, **XX** |
+
+PQ and HFS variants do not always share their classical base's message count — see the PQ and HFS pattern tables below.
 
 ### By Use Case
 
@@ -154,13 +156,13 @@ Deferred patterns delay static key transmission to later messages for improved p
 |---------|-------------|----------|----------|
 | **NK1** | `<- s` | `-> e`<br>`<- e, ee, es` | NK with responder static delayed |
 | **NX1** | | `-> e`<br>`<- e, ee, s`<br>`-> es` | NX with responder static delayed, es deferred |
-| **X1N** | | `-> e`<br>`<- e, ee`<br>`-> s, se` | XN variant (same as XN) |
-| **X1K** | `<- s` | `-> e, es`<br>`<- e, ee`<br>`-> s, se` | XK with initiator static delayed |
+| **X1N** | | `-> e`<br>`<- e, ee`<br>`-> s`<br>`<- se` | XN with the `se` DH deferred to a fourth message |
+| **X1K** | `<- s` | `-> e, es`<br>`<- e, ee`<br>`-> s`<br>`<- se` | XK with initiator static and `se` deferred |
 | **XK1** | `<- s` | `-> e`<br>`<- e, ee, es`<br>`-> s, se` | XK with responder DH delayed |
-| **X1K1** | `<- s` | `-> e`<br>`<- e, ee, es`<br>`-> s, se` | XK with both delays |
-| **X1X** | | `-> e`<br>`<- e, ee, s, es`<br>`-> s, se` | XX variant |
+| **X1K1** | `<- s` | `-> e`<br>`<- e, ee, es`<br>`-> s`<br>`<- se` | XK with both delays |
+| **X1X** | | `-> e`<br>`<- e, ee, s, es`<br>`-> s`<br>`<- se` | XX with the `se` DH deferred |
 | **XX1** | | `-> e`<br>`<- e, ee, s`<br>`-> es, s, se` | XX with responder DH delayed |
-| **X1X1** | | `-> e`<br>`<- e, ee, s`<br>`-> es, s, se` | XX with both delays |
+| **X1X1** | | `-> e`<br>`<- e, ee, s`<br>`-> es, s`<br>`<- se` | XX with both delays |
 | **K1N** | `-> s` | `-> e`<br>`<- e, ee`<br>`-> se` | KN with initiator DH delayed |
 | **K1K** | `-> s, <- s` | `-> e, es`<br>`<- e, ee`<br>`-> se` | KK with initiator DH delayed |
 | **KK1** | `-> s, <- s` | `-> e`<br>`<- e, ee, se, es` | KK with responder DH delayed |
@@ -241,24 +243,26 @@ Noise_pqXX_M768_ChaChaPoly_SHA256
 
 | Pattern | Pre-Messages | Messages | Classical Equivalent |
 |---------|-------------|----------|---------------------|
-| **pqN** | `<- s` | `-> e, skem` | N |
+| **pqN** | `<- s` | `-> skem` | N |
 
 ### PQ Interactive Patterns
 
 | Pattern | Pre-Messages | Messages | Classical Equivalent | Use Case |
 |---------|-------------|----------|---------------------|----------|
-| **pqNN** | | `-> e`<br>`<- e, ekem` | NN | Fully anonymous, quantum-resistant |
-| **pqNK** | `<- s` | `-> e, skem`<br>`<- e, ekem` | NK | Client knows server's KEM key |
-| **pqNX** | | `-> e`<br>`<- e, ekem, s, skem` | NX | Quantum-resistant server auth |
-| **pqXN** | | `-> e`<br>`<- e, ekem`<br>`-> s, skem` | XN | Quantum-resistant client auth |
-| **pqXK** | `<- s` | `-> e, skem`<br>`<- e, ekem`<br>`-> s, skem` | XK | Client authenticates to known server |
-| **pqXX** | | `-> e`<br>`<- e, ekem, s, skem`<br>`-> s, skem` | XX | Full mutual auth (most common PQ) |
-| **pqKN** | `-> s` | `-> e`<br>`<- e, ekem, skem` | KN | Server knows client's KEM key |
-| **pqKK** | `-> s, <- s` | `-> e, skem`<br>`<- e, ekem, skem` | KK | Both have cached KEM keys |
-| **pqKX** | `-> s` | `-> e`<br>`<- e, ekem, skem, s, skem` | KX | Client known, server authenticates |
-| **pqIN** | | `-> e, s`<br>`<- e, ekem, skem` | IN | Immediate client auth |
-| **pqIK** | `<- s` | `-> e, skem, s`<br>`<- e, ekem, skem` | IK | Immediate auth to known server |
-| **pqIX** | | `-> e, s`<br>`<- e, ekem, skem, s, skem` | IX | Immediate mutual auth |
+| **pqNN** | | `-> e`<br>`<- ekem` | NN | Fully anonymous, quantum-resistant |
+| **pqNK** | `<- s` | `-> skem, e`<br>`<- ekem` | NK | Client knows server's KEM key |
+| **pqNX** | | `-> e`<br>`<- ekem, s`<br>`-> skem` | NX | Quantum-resistant server auth |
+| **pqXN** | | `-> e`<br>`<- ekem`<br>`-> s`<br>`<- skem` | XN | Quantum-resistant client auth |
+| **pqXK** | `<- s` | `-> skem, e`<br>`<- ekem`<br>`-> s`<br>`<- skem` | XK | Client authenticates to known server |
+| **pqXX** | | `-> e`<br>`<- ekem, s`<br>`-> skem, s`<br>`<- skem` | XX | Full mutual auth (most common PQ) |
+| **pqKN** | `-> s` | `-> e`<br>`<- ekem, skem` | KN | Server knows client's KEM key |
+| **pqKK** | `-> s, <- s` | `-> skem, e`<br>`<- ekem, skem` | KK | Both have cached KEM keys |
+| **pqKX** | `-> s` | `-> e`<br>`<- ekem, skem, s`<br>`-> skem` | KX | Client known, server authenticates |
+| **pqIN** | | `-> e, s`<br>`<- ekem, skem` | IN | Immediate client auth |
+| **pqIK** | `<- s` | `-> skem, e, s`<br>`<- ekem, skem` | IK | Immediate auth to known server |
+| **pqIX** | | `-> e, s`<br>`<- ekem, skem, s`<br>`-> skem` | IX | Immediate mutual auth |
+
+**Note**: unlike their classical equivalents, PQ patterns are not simply "classical with `ee` → `ekem`". The responder does not transmit an ephemeral key — it encapsulates to the initiator's. Where a classical pattern lets the responder piggyback its authentication on message 2, the PQ variant needs a further round trip, so `pqXX`, `pqXK` and `pqXN` are four-message patterns and `pqNX`, `pqKX` and `pqIX` are three-message patterns.
 
 ### PQ Token Semantics
 
@@ -290,17 +294,20 @@ auto bobStatic = protocol.dh.GenerateKeypair();
 HandshakeConfig aliceCfg{.protocol = protocol, .isInitiator = true, .localStatic = aliceStatic};
 HandshakeConfig bobCfg{.protocol = protocol, .isInitiator = false, .localStatic = bobStatic};
 
-// Execute pqXX handshake (3 messages, same as XX)
+// Execute pqXX handshake (4 messages — one more than classical XX)
 HandshakeState aliceHs(aliceCfg), bobHs(bobCfg);
 
 auto msg1 = aliceHs.WriteMessage({});      // -> e
 bobHs.ReadMessage(msg1);
 
-auto msg2 = bobHs.WriteMessage({});        // <- e, ekem, s, skem
+auto msg2 = bobHs.WriteMessage({});        // <- ekem, s
 aliceHs.ReadMessage(msg2);
 
-auto msg3 = aliceHs.WriteMessage({});      // -> s, skem
+auto msg3 = aliceHs.WriteMessage({});      // -> skem, s
 bobHs.ReadMessage(msg3);
+
+auto msg4 = bobHs.WriteMessage({});        // <- skem
+aliceHs.ReadMessage(msg4);
 
 // Handshake complete - quantum-resistant transport
 ```
@@ -326,20 +333,20 @@ Noise_XXhfs_25519+M768_ChaChaPoly_SHA256
 
 ### HFS Interactive Patterns
 
-| Pattern | Messages | Classical Base | Use Case |
-|---------|----------|----------------|----------|
-| **NNhfs** | `-> e, e1`<br>`<- e, e1, ee, ekem1` | NN | Anonymous hybrid |
-| **NKhfs** | `-> e, e1, es`<br>`<- e, e1, ee, ekem1` | NK | Hybrid server auth |
-| **NXhfs** | `-> e, e1`<br>`<- e, e1, ee, ekem1, s, es` | NX | Hybrid responder auth |
-| **XNhfs** | `-> e, e1`<br>`<- e, e1, ee, ekem1`<br>`-> s, se` | XN | Hybrid initiator auth |
-| **XKhfs** | `-> e, e1, es`<br>`<- e, e1, ee, ekem1`<br>`-> s, se` | XK | Hybrid mutual (known server) |
-| **XXhfs** | `-> e, e1`<br>`<- e, e1, ee, ekem1, s, es`<br>`-> s, se` | XX | Hybrid mutual auth |
-| **KNhfs** | `-> e, e1`<br>`<- e, e1, ee, ekem1, se` | KN | Hybrid (known initiator) |
-| **KKhfs** | `-> e, e1, es, ss`<br>`<- e, e1, ee, ekem1, se` | KK | Hybrid (both known) |
-| **KXhfs** | `-> e, e1`<br>`<- e, e1, ee, ekem1, se, s, es` | KX | Hybrid (known initiator) |
-| **INhfs** | `-> e, e1, s`<br>`<- e, e1, ee, ekem1, se` | IN | Immediate hybrid initiator |
-| **IKhfs** | `-> e, e1, es, s, ss`<br>`<- e, e1, ee, ekem1, se` | IK | Immediate hybrid mutual |
-| **IXhfs** | `-> e, e1, s`<br>`<- e, e1, ee, ekem1, se, s, es` | IX | Immediate hybrid responder |
+| Pattern | Pre-Messages | Messages | Classical Base | Use Case |
+|---------|-------------|----------|----------------|----------|
+| **NNhfs** | | `-> e, e1`<br>`<- e, ee, ekem1` | NN | Anonymous hybrid |
+| **NKhfs** | `<- s` | `-> e, es, e1`<br>`<- e, ee, ekem1` | NK | Hybrid server auth |
+| **NXhfs** | | `-> e, e1`<br>`<- e, ee, ekem1, s, es` | NX | Hybrid responder auth |
+| **XNhfs** | | `-> e, e1`<br>`<- e, ee, ekem1`<br>`-> s, se` | XN | Hybrid initiator auth |
+| **XKhfs** | `<- s` | `-> e, es, e1`<br>`<- e, ee, ekem1`<br>`-> s, se` | XK | Hybrid mutual (known server) |
+| **XXhfs** | | `-> e, e1`<br>`<- e, ee, ekem1, s, es`<br>`-> s, se` | XX | Hybrid mutual auth |
+| **KNhfs** | `-> s` | `-> e, e1`<br>`<- e, ee, ekem1, se` | KN | Hybrid (known initiator) |
+| **KKhfs** | `-> s, <- s` | `-> e, es, ss, e1`<br>`<- e, ee, ekem1, se` | KK | Hybrid (both known) |
+| **KXhfs** | `-> s` | `-> e, e1`<br>`<- e, ee, ekem1, se, s, es` | KX | Hybrid (known initiator) |
+| **INhfs** | | `-> e, e1, s`<br>`<- e, ee, ekem1, se` | IN | Immediate hybrid initiator |
+| **IKhfs** | `<- s` | `-> e, es, s, ss, e1`<br>`<- e, ee, ekem1, se` | IK | Immediate hybrid mutual |
+| **IXhfs** | | `-> e, e1, s`<br>`<- e, ee, ekem1, se, s, es` | IX | Immediate hybrid responder |
 
 ### HFS Token Semantics
 
@@ -349,6 +356,9 @@ Noise_XXhfs_25519+M768_ChaChaPoly_SHA256
 | **e1** | KEM ephemeral key | ML-KEM-512/768/1024 |
 | **ee** | DH between ephemerals | DH shared secret |
 | **ekem1** | KEM encapsulation to e1 | KEM shared secret |
+
+- **`e1` is sent once, by the initiator only.** The responder replies with `ekem1`; it does not send an `e1` of its own.
+- **`e1` placement**: `e1` follows the initiator's `e`, except when that same message also performs a DH operation, in which case `e1` follows the last DH in the message (compare `NNhfs` message 1, `-> e, e1`, with `NKhfs` message 1, `-> e, es, e1`).
 
 **Key Insight**: HFS patterns mix **both** DH and KEM secrets into the chaining key, ensuring security even if one primitive is broken.
 
@@ -376,7 +386,7 @@ HandshakeState aliceHs(aliceCfg), bobHs(bobCfg);
 auto msg1 = aliceHs.WriteMessage({});      // -> e, e1 (DH + KEM ephemerals)
 bobHs.ReadMessage(msg1);
 
-auto msg2 = bobHs.WriteMessage({});        // <- e, e1, ee, ekem1, s, es
+auto msg2 = bobHs.WriteMessage({});        // <- e, ee, ekem1, s, es
 aliceHs.ReadMessage(msg2);
 
 auto msg3 = aliceHs.WriteMessage({});      // -> s, se
@@ -564,7 +574,7 @@ See [examples/example_test.cpp](examples/example_test.cpp) for complete working 
 
 ---
 
-**Last Updated**: 2026-04-25
+**Last Updated**: 2026-08-26
 **Pattern Count**: 82 patterns (57 classical + 13 PQ + 12 HFS, all tested)
 **Test Coverage**: 200+ test cases, 500+ assertions
 **Specification Version**: Revision 34+ (with PQNoise and HFS extensions)
