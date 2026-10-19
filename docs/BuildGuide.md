@@ -9,8 +9,8 @@ This document provides detailed build instructions for NoisePQC++ across differe
 - [Prerequisites](#prerequisites)
 - [Platform-Specific Instructions](#platform-specific-instructions)
   - [Linux (x86_64 and ARM64)](#linux-x86_64-and-arm64)
-    - [Raspberry Pi 4/5 (ARM64)](#raspberry-pi-45-arm64)
-  - [macOS (x86_64 and ARM64)](#macos-x86_64-and-arm64)
+    - [Raspberry Pi 5 (ARM64)](#raspberry-pi-5-arm64)
+  - [macOS (Apple Silicon)](#macos-apple-silicon)
   - [Windows (x86_64)](#windows-x86_64)
 - [Docker](#docker)
 - [Build Options](#build-options)
@@ -20,47 +20,49 @@ This document provides detailed build instructions for NoisePQC++ across differe
 
 ### All Platforms
 
-- **CMake** 4.0 or higher (required for C++ module support, tested with 4.0.4)
+- **CMake** 4.3 or higher (required for C++ module support, tested with 4.3.5)
 
 > Note: For `import std` support make sure to use a CMake version that includes the necessary C++23 module detection features.
-> CMake 4.0.4 is recommended and has been tested with the specified toolchains. With other versions, you will have to get the
-> right experimental ID. Refer to CMake's documentation for the version you are using to find the correct `CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` value if you are not using 4.0.4.
+> CMake 4.3.x is required and has been tested with the specified toolchains. The `CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` UUID set
+> in the top-level CMakeLists.txt is valid for the CMake 4.3.x series; for other versions, refer to CMake's documentation
+> (`Help/dev/experimental.rst` in the CMake source) for the correct value. Distro-packaged CMake may be older than 4.3 —
+> if so, install a current release from [cmake.org](https://cmake.org/download/).
 
 - **Ninja** build system (required for C++ modules)
 - **C++23-compatible compiler**:
-  - Clang 18+ (recommended, tested on macOS and Linux with 18.1.8)
-  - GCC 15.2+ (with C++ modules support, tested on Linux x86_64 with 15.2.x)
+  - Clang 21.1.x (recommended, tested on macOS and Linux with 21.1.x)
+  - GCC 15.2+ (with C++ modules support, tested on Ubuntu 26.04 x86_64 with 15.2.x)
   - MSVC 19.44+ (Visual Studio 2022 17.12+, tested on Windows x86_64)
 - **Catch2** v3.11.0 for testing (automatically downloaded via CMake FetchContent if not found)
-- **Botan** 3.10.0 cryptographic library (pre-downloaded Botan minimized build source in `third_party/`)
+- **Botan** 3.13.0 cryptographic library (pre-downloaded Botan minimized build source in `third_party/`)
 - **Google Benchmark** for benchmarking (automatically downloaded via CMake FetchContent if not found). See [Benchmarking Guide](BenchmarkingGuide.md) for complete benchmarking instructions.
 - **Git** for version control
 
 **Important**:
 - C++ modules require the Ninja generator. The Unix Makefiles generator is not supported.
 - On first CMake run, Catch2 and Google Benchmark (when `NOISEPQC_BUILD_BENCHMARKS` is set to `ON`, the default) will be automatically downloaded if not found system-wide.
-- Botan 3.11.1 minimized build source is provided for macOS (x86_64, ARM64), Linux (x86_64, ARM64), and Windows (x86_64).
+- Botan 3.13.0 minimized build source is provided for macOS (ARM64; x86_64 untested), Linux (x86_64, ARM64), and Windows (x86_64).
 
 ## Platform-Specific Instructions
 
 ### Linux (x86_64 and ARM64)
 
-**Supported Architectures**: x86_64 and ARM64 (tested on Debian Trixie/Ubuntu 24.04 x86_64 and Raspberry Pi 5)  
-**Botan Version**: 3.10.0 (pre-downloaded source included in `third_party/`)  
-**Compilers**: Clang 18+ and GCC 15.2+
+**Supported Architectures**: x86_64 and ARM64 (tested on Ubuntu 26.04 x86_64/ARM64 and Raspberry Pi 5 on Debian Trixie)  
+**Botan Version**: 3.13.0 (pre-downloaded source included in `third_party/`)  
+**Compilers**: Clang 21.1.x and GCC 15.2+
 
 #### Ubuntu / Debian (Clang)
 
 ```bash
 # Install dependencies. See cmake note above for experimental import std module support.
 sudo apt update
-sudo apt install cmake ninja-build clang-18 libc++-18-dev libc++abi-18-dev
+sudo apt install cmake ninja-build clang-21 libc++-21-dev libc++abi-21-dev
 
 # Configure with the Linux Clang toolchain file
 # The toolchain file handles: compiler paths, libc++, headers, and linker flags
 # Run cmake command below from inside the repository root directory (where CMakeLists.txt is located)
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-linux-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-linux-toolchain.cmake
 
 # Build
 cmake --build build -j$(nproc)
@@ -70,22 +72,19 @@ ctest --test-dir build --output-on-failure
 ```
 
 **What the toolchain file does**:
-- Sets Clang 18 compiler (`/usr/bin/clang++-18`)
+- Sets Clang 21 compiler (`/usr/bin/clang++-21`)
 - Configures libc++ standard library
-- Sets proper include paths for LLVM 18 headers
-- Configures linker flags with rpath for libc++
-- Enables `import std;` support
+- Points CMake at libc++'s std-module manifest (`libc++.modules.json`) for `import std;` support
+- Configures linker flags with rpath for libc++ (with libc++abi listed explicitly, since the distro packages ship `libc++.so` as a bare symlink rather than a linker script)
 
-#### Ubuntu / Debian (GCC 15.2)
+#### Ubuntu (GCC 15.2+)
 
-**Note**: GCC 15.2+ required for full C++23 modules support with `import std;`
+**Note**: GCC 15.2+ is required for full C++23 modules support with `import std;`. On Ubuntu 26.04, GCC 15.2 is the distro default — installing `build-essential` provides the `gcc-15`/`g++-15` compilers the toolchain file expects. (The GCC build path is tested on Ubuntu only.)
 
 ```bash
 # Install dependencies. See cmake note above for experimental import std module support.
-# Note: GCC 15.2 may need to be built from source
-# Ensure GCC 15.2 is installed to /opt/gcc-15 (or adjust toolchain file)
 sudo apt update
-sudo apt install cmake ninja-build gcc-15 g++-15
+sudo apt install build-essential cmake ninja-build
 
 # Configure with the GCC 15 toolchain file
 # The toolchain file handles: compiler paths, libstdc++, headers, and linker flags
@@ -101,24 +100,23 @@ ctest --test-dir build --output-on-failure
 ```
 
 **What the toolchain file does**:
-- Sets GCC 15 compiler (`/opt/gcc-15/bin/g++-15`)
-- Configures libstdc++ standard library
-- Sets proper include paths for GCC 15 headers
-- Configures linker flags with rpath for libstdc++
-- Enables `import std;` support
+- Sets the distro GCC 15 compilers (`/usr/bin/gcc-15`, `/usr/bin/g++-15`)
+- Nothing else is needed: the distro compiler finds its own headers and libstdc++, and CMake discovers libstdc++'s std-module manifest (`libstdc++.modules.json`) automatically via the compiler
 
-#### Raspberry Pi 4/5 (ARM64)
+#### Raspberry Pi 5 (ARM64)
+
+The Raspberry Pi 5 uses the same `cmake/clang21-linux-toolchain.cmake` as the other Linux hosts — Debian Trixie's LLVM 21 packages lay out the toolchain under the same paths as Ubuntu's. On Debian Trixie, `clang-21` comes from `trixie-backports`.
 
 ```bash
 # Install dependencies. See cmake note above for experimental import std module support.
 sudo apt update
-sudo apt install cmake ninja-build clang-18 libc++-18-dev libc++abi-18-dev
+sudo apt install -t trixie-backports clang-21 libc++-21-dev libc++abi-21-dev
+sudo apt install cmake ninja-build
 
-# Configure with the Raspberry Pi toolchain file
-# The toolchain file handles: compiler paths, libc++, headers, and linker flags
+# Configure with the shared Linux Clang toolchain file
 # Run cmake command below from inside the repository root directory (where CMakeLists.txt is located)
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-rasPi-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-linux-toolchain.cmake
 
 # Build (use fewer jobs on Pi to avoid memory issues)
 cmake --build build -j2
@@ -127,32 +125,24 @@ cmake --build build -j2
 ctest --test-dir build --output-on-failure
 ```
 
-**What the toolchain file does**:
-- Sets Clang 18 compiler (`/usr/bin/clang++-18`)
-- Configures libc++ standard library
-- Sets proper include paths for LLVM 18 headers
-- Configures linker flags with rpath for libc++
-- Enables `import std;` support
-- Optimized for ARM64 architecture
+### macOS (Apple Silicon)
 
-### macOS (x86_64 and ARM64)
-
-**Supported Architectures**: Intel (x86_64) and Apple Silicon (ARM64)  
-**Botan Version**: 3.10.0 (pre-downloaded source included in `third_party/`)
+**Supported Architecture**: Apple Silicon (ARM64)  
+**Intel (x86_64)**: Intel (x86_64) is untested: the build should work, but it has not been verified for this release and is pinned to the macOS 26 SDK. The Intel Botan sources (`third_party/botan/plat_mac_x86/`) will be removed in a future release.  
+**macOS SDK**: the Command Line Tools `MacOSX26.sdk` must be installed (see below)  
+**Botan Version**: 3.13.0 (pre-downloaded source included in `third_party/`)
 
 #### Using Homebrew LLVM
 
-For Homebrew Clang on macOS, review the `import std;` / `libc++.modules.json` note below before building.
-
 ```bash
 # Install dependencies. See cmake note above for experimental import std module support.
-brew install cmake ninja llvm@18
+brew install cmake ninja llvm@21
 
 # Configure with the macOS toolchain file
 # The toolchain file handles: compiler paths, libc++, headers, and linker flags
 # Run cmake command below from inside the repository root directory (where CMakeLists.txt is located)
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake
 
 # Build
 cmake --build build -j$(sysctl -n hw.ncpu)
@@ -162,152 +152,24 @@ ctest --test-dir build --output-on-failure
 ```
 
 **What the toolchain file does**:
-- Sets Clang 18 compiler from Homebrew (`/usr/local/opt/llvm@18/bin/clang++` on Intel macOS or `/opt/homebrew/opt/llvm@18/bin/clang++` on Apple Silicon)
-- Configures libc++ standard library
-- Sets proper include paths for LLVM 18 headers
-- Configures linker flags for libc++ and libunwind
-- Enables `import std;` support
+- Selects the Homebrew LLVM 21 prefix by architecture (`/opt/homebrew/opt/llvm@21` on Apple Silicon, `/usr/local/opt/llvm@21` on Intel, untested)
+- Sets the Clang 21 compilers from that prefix
+- Configures libc++ standard library and include paths
+- Points CMake directly at libc++'s std-module manifest (`libc++.modules.json`) via `CMAKE_CXX_STDLIB_MODULES_JSON` for `import std;` support
+- Configures linker flags for libc++ and libunwind (libunwind moved to `lib/unwind` in LLVM 21)
+- Pins the macOS SDK to `/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk`, the same SDK that Homebrew LLVM 21's default config files use. The pin is needed because `clang-scan-deps` 21 does not load those config files (which on Homebrew LLVM 21 are the sole source of `-isysroot`). It does not use `xcrun --show-sdk-path`: with Xcode 27.1 that returns SDK 27, whose headers break LLVM 21's libc++ (`DBL_MAX_10_EXP` undeclared in C++20 and later). If you change SDKs, delete the build directory (or its `CMakeCache.txt`) before reconfiguring
 
 #### Homebrew Clang `import std;` Note
 
-When building NoisePQC++ with **CMake 4.0.x** and **Homebrew Clang 18.1.x** on macOS, CMake may fail to enable `import std;` because Homebrew Clang can report a bad, relative, or incomplete path for `libc++.modules.json` during compiler detection.
-
-Typical configure-time errors include:
-
-```text
-The "CXX_MODULE_STD" property on the target "<target>" requires that the "__CMAKE::CXX23" target exist, but it was not provided by the toolchain.
-```
-
-or:
-
-```text
-Reason: `libc++.modules.json` resource does not exist
-```
-
-This is a macOS/Homebrew toolchain discovery issue rather than a NoisePQC++ source issue. The specific path-resolution problem described here is not expected for the Linux build paths documented below. In particular:
-- the Linux Clang toolchain does not use Homebrew's macOS libc++ layout
-- the Linux GCC 15.2 toolchain uses `libstdc++` rather than `libc++.modules.json`
-
-**Recommended fix (project-local and persistent for this repository)**
-
-> **Note**: The fixes below are based on research and have not yet been fully tested. If you encounter issues, please report them.
-
-The preferred fix is to add a Clang resource-directory hint to the macOS toolchain file so CMake sees the correct libc++ layout during compiler detection.
-
-Open:
-
-```text
-cmake/clang18-macOS-toolchain.cmake
-```
-
-and add one of the following lines after the compiler definitions.
-
-For Intel macOS:
-
-```cmake
-set(CMAKE_CXX_COMPILER_ID_ARG1
-    "-resource-dir=/usr/local/opt/llvm@18/lib/c++"
-    CACHE STRING "Extra argument used when CMake probes Clang for import std" FORCE)
-```
-
-For Apple Silicon:
-
-```cmake
-set(CMAKE_CXX_COMPILER_ID_ARG1
-    "-resource-dir=/opt/homebrew/opt/llvm@18/lib/c++"
-    CACHE STRING "Extra argument used when CMake probes Clang for import std" FORCE)
-```
-
-Then do a clean configure:
-
-```bash
-rm -rf build
-cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake
-```
-
-**One-shot configure workaround**
-
-Instead of editing the toolchain file, pass the same hint on the CMake command line:
-
-```bash
-cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake \
-  -DCMAKE_CXX_COMPILER_ID_ARG1="-resource-dir=$(brew --prefix llvm@18)/lib/c++"
-```
-
-#### Alternate machine-local workaround: patch the installed CMake compiler module for Homebrew Clang 18.x
-
-> **Note**: The fix below are based on research and **have been fully tested** to work. If you encounter issues, please report them.
-
-If you are building on macOS with **Homebrew Clang 18.x** and **CMake 4.0.x**, and `import std;` still fails because CMake cannot locate `libc++.modules.json`, you can patch the installed CMake compiler module as a machine-local workaround.
-
-This workaround is specifically for **Clang 18.x**. It is different from the newer **Clang 19+** workaround that uses `-print-library-module-manifest-path`.
-
-1. Find CMake's module root:
-
-    ```bash
-    cmake --system-information | grep CMAKE_ROOT
-    ```
-
-2. Open this file under that root:
-
-    ```text
-    ${CMAKE_ROOT}/Modules/Compiler/Clang-CXX-CXXImportStd.cmake
-    ```
-
-    On Homebrew CMake this is typically one of:
-
-    ```text
-    /opt/homebrew/Cellar/cmake/4.0.4/share/cmake/Modules/Compiler/Clang-CXX-CXXImportStd.cmake
-    /usr/local/Cellar/cmake/4.0.4/share/cmake/Modules/Compiler/Clang-CXX-CXXImportStd.cmake
-    ```
-
-3. Back up the file before editing it.
-
-4. Find the compiler probe that looks like this:
-
-    ```cmake
-    COMMAND
-      "${CMAKE_CXX_COMPILER}"
-      ${CMAKE_CXX_COMPILER_ID_ARG1}
-      -print-file-name=libc++.modules.json
-    ```
-
-5. Replace that last line with:
-
-    ```cmake
-    -print-file-name=../../c++/libc++.modules.json
-    ```
-
-    So the patched block becomes:
-
-    ```cmake
-    COMMAND
-      "${CMAKE_CXX_COMPILER}"
-      ${CMAKE_CXX_COMPILER_ID_ARG1}
-      -print-file-name=../../c++/libc++.modules.json
-    ```
-
-6. Remove your build directory and reconfigure:
-
-    ```bash
-    rm -rf build
-    cmake -B build -S . -G Ninja \
-      -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake
-    ```
-
-This patch is a **machine-local workaround** and will apply to other CMake projects on that Mac, but it is not permanent across CMake upgrades or reinstalls. It should be treated as a last resort after the project-local toolchain-file fix.
-
-This issue is specific to the macOS/Homebrew Clang + libc++ module discovery path. It is not the expected path for the Linux toolchains documented in this guide, and the Linux GCC 15.2 build path uses `libstdc++` rather than `libc++.modules.json`.
+Earlier releases of this project (Clang 18 with CMake 4.0.x) required manual workarounds on macOS because Homebrew Clang reported a bad path for `libc++.modules.json` during CMake's compiler detection, breaking `import std;`. This is no longer the case: with CMake ≥ 4.3 the toolchain file points CMake directly at the manifest via `CMAKE_CXX_STDLIB_MODULES_JSON`, so no toolchain patching or `-resource-dir` hints are needed. If you still see configure-time errors mentioning `CXX_MODULE_STD`, `__CMAKE::CXX23`, or `libc++.modules.json`, verify that `llvm@21` is installed via Homebrew and that you passed `-DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake`.
 
 ### Windows (x86_64)
 
 **Supported Architecture**: x86_64
-**Botan Version**: 3.10.0 (pre-downloaded source included in `third_party/`)
+**Botan Version**: 3.13.0 (pre-downloaded source included in `third_party/`)
 **Compiler**: MSVC 19.44+ (Visual Studio 2022 17.12+)
 
-> **Performance Note**: MSVC's C++ modules implementation is currently slower than Clang/GCC, so Windows builds may take significantly longer to compile. For development on Windows, consider using the Docker image with Clang 18 for faster iteration.
+> **Performance Note**: MSVC's C++ modules implementation is currently slower than Clang/GCC, so Windows builds may take significantly longer to compile. For development on Windows, consider using the Docker image with Clang 21 for faster iteration.
 > Use "Release" build configuration to reduce compile times and testing times, as "Debug" builds with MSVC modules can be particularly slow.
 
 #### Prerequisites
@@ -353,15 +215,16 @@ cmake --build build-release --config Release
 ctest --test-dir build-release --output-on-failure
 ```
 
-**Note**: A separate toolchain file is **not** needed on Windows — the active Developer Command Prompt session is what selects MSVC. This differs from Linux/macOS, where `cmake/clang18-*-toolchain.cmake` or `cmake/gcc15-linux-toolchain.cmake` must be passed via `-DCMAKE_TOOLCHAIN_FILE`.
+**Note**: A separate toolchain file is **not** needed on Windows — the active Developer Command Prompt session is what selects MSVC. This differs from Linux/macOS, where `cmake/clang21-*-toolchain.cmake` or `cmake/gcc15-linux-toolchain.cmake` must be passed via `-DCMAKE_TOOLCHAIN_FILE`. CMake ≥ 4.3 is required on Windows as well.
 
 ## Docker
 
 Pre-configured Docker images are available for building and testing on Linux without setting up a local toolchain. The Dockerfiles are located in the `docker/` directory.
 
 Available images:
-- **Clang 18** (`docker/clang18-linux/Dockerfile`): Debian Trixie with Clang 18.1.8, CMake 4.0.4, Ninja
-- **GCC 15** (`docker/gcc15-linux/Dockerfile`): Debian Trixie with GCC 15.2.0 (built from source), CMake 4.0.4, Ninja
+- **Clang 21** (`docker/clang21-ubuntu26/Dockerfile`): Ubuntu 26.04 with Clang 21.1.x, CMake 4.3.5, Ninja — amd64 and arm64
+- **GCC 15** (`docker/gcc15-ubuntu26/Dockerfile`): Ubuntu 26.04 with GCC 15.2 (distro packages), CMake 4.3.5, Ninja — amd64 only
+- The archived 0.9.0 images (Debian Trixie / Clang 18, paired with the `v0.9.0` tag) remain published for the paper artifact; see [Archived Images](DockerGuide.md#archived-images-090--paper-artifact).
 
 Both images include a Python environment with analysis tools (pandas, matplotlib, seaborn, JupyterLab) for benchmark post-processing.
 
@@ -375,7 +238,7 @@ To enable comprehensive debug logging showing handshake state transitions:
 
 ```bash
 cmake -B build-debug -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake \
   -DNOISE_DEBUG_BUILD=ON
 ```
 
@@ -419,8 +282,8 @@ cmake -B build -S . -G Ninja -DCMAKE_CXX_STANDARD=23
 **Problem**: Compiler cannot find C++ module files or "Unsupported generator" error
 
 **Solution**:
-- Ensure you're using Clang 18+ or GCC 15+
-- Check that CMake is version 4.0+
+- Ensure you're using Clang 21+ or GCC 15.2+
+- Check that CMake is version 4.3+
 - **Must use Ninja generator**: Add `-G Ninja` to cmake command
 - Install Ninja: `brew install ninja` (macOS) or `sudo apt install ninja-build` (Linux)
 - Try a clean rebuild: `rm -rf build && cmake -B build -S . -G Ninja`
@@ -429,7 +292,7 @@ cmake -B build -S . -G Ninja -DCMAKE_CXX_STANDARD=23
 
 **Problem**: CMake fails during configure with `__CMAKE::CXX23`, `CXX_MODULE_STD`, or `libc++.modules.json` errors when using Homebrew Clang and `import std;`.
 
-**Solution**: See the detailed [Homebrew Clang `import std;` Note](#homebrew-clang-import-std-note) in the macOS section above for causes and fixes.
+**Solution**: Verify `llvm@21` is installed via Homebrew, CMake is ≥ 4.3, and the configure command passes `-DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake` — the toolchain file points CMake at the module manifest directly. See the [Homebrew Clang `import std;` Note](#homebrew-clang-import-std-note) in the macOS section above.
 
 ### Botan Library Errors
 
@@ -456,19 +319,19 @@ cmake -B build -S . -G Ninja -DCMAKE_CXX_STANDARD=23
 **Solution**:
 ```bash
 # Add LLVM to PATH
-# Intel macOS:
-export PATH="/usr/local/opt/llvm@18/bin:$PATH"
-export LDFLAGS="-L/usr/local/opt/llvm@18/lib"
-export CPPFLAGS="-I/usr/local/opt/llvm@18/include"
+# Intel macOS (untested):
+export PATH="/usr/local/opt/llvm@21/bin:$PATH"
+export LDFLAGS="-L/usr/local/opt/llvm@21/lib"
+export CPPFLAGS="-I/usr/local/opt/llvm@21/include"
 
 # Apple Silicon macOS:
-export PATH="/opt/homebrew/opt/llvm@18/bin:$PATH"
-export LDFLAGS="-L/opt/homebrew/opt/llvm@18/lib"
-export CPPFLAGS="-I/opt/homebrew/opt/llvm@18/include"
+export PATH="/opt/homebrew/opt/llvm@21/bin:$PATH"
+export LDFLAGS="-L/opt/homebrew/opt/llvm@21/lib"
+export CPPFLAGS="-I/opt/homebrew/opt/llvm@21/include"
 
 # Reconfigure with the toolchain file (recommended over manual compiler flags)
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake
 ```
 
 ### Windows: "No CMAKE_CXX_COMPILER could be found"

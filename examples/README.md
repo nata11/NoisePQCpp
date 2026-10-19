@@ -1,6 +1,6 @@
 # NoisePQC++ Examples
 
-This directory contains comprehensive examples demonstrating the NoisePQC++ v0.9.0 API, including classical, post-quantum, and hybrid Noise Protocol patterns.
+This directory contains comprehensive examples demonstrating the NoisePQC++ v1.0.0 API, including classical, post-quantum, and hybrid Noise Protocol patterns.
 
 ## Overview
 
@@ -30,19 +30,18 @@ The examples are designed to help you learn and understand the Noise Protocol Fr
 # From project root
 
 # Configure with the appropriate toolchain file for your platform:
-#   - macOS (Intel/Apple Silicon): cmake/clang18-macOS-toolchain.cmake
-#   - Linux (Clang 18): cmake/clang18-linux-toolchain.cmake
-#   - Linux (GCC 15): cmake/gcc15-linux-toolchain.cmake
-#   - Raspberry Pi (ARM64): cmake/clang18-rasPi-toolchain.cmake
+#   - macOS (Apple Silicon; Intel untested): cmake/clang21-macOS-toolchain.cmake
+#   - Linux incl. Raspberry Pi 5 (Clang 21): cmake/clang21-linux-toolchain.cmake
+#   - Linux (GCC 15.2+): cmake/gcc15-linux-toolchain.cmake
 #   - Windows (MSVC): No toolchain file needed
 
 # Example for macOS:
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake
 
 # Example for Linux with Clang:
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-linux-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-linux-toolchain.cmake
 
 # Build all examples
 cmake --build build
@@ -53,7 +52,7 @@ cmake --build build --target pattern_zoo
 ```
 
 **Why use toolchain files?**
-- Ensures correct compiler (Clang 18 or GCC 15.2) is used
+- Ensures correct compiler (Clang 21 or GCC 15.2+) is used
 - Configures the appropriate C++ standard library (libc++ for Clang, libstdc++ for GCC)
 - Sets proper include paths for headers
 - Configures linker flags and rpath for standard library
@@ -523,7 +522,7 @@ For performance benchmarking and optimization:
 ### Build Issues
 
 **Problem**: Examples won't compile
-**Solution**: Ensure you're using C++23 compiler (Clang 18+, GCC 15.2+, or MSVC 19.44+)
+**Solution**: Ensure you're using C++23 compiler (Clang 21+, GCC 15.2+, or MSVC 19.44+)
 
 ```bash
 cmake -B build -S . -G Ninja -DCMAKE_CXX_COMPILER=clang++-18
@@ -542,7 +541,7 @@ cmake -B build -S . -G Ninja -DCMAKE_CXX_COMPILER=clang++-18
 
 ---
 
-**Version**: NoisePQC++ v0.9.0
+**Version**: NoisePQC++ v1.0.0
 **Last Updated**: 2026-04-25
-**Botan Version**: 3.11.1
+**Botan Version**: 3.13.0
 **Catch2 Version**: 3.11.0

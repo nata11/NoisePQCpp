@@ -1,6 +1,6 @@
 # Logging and Debugging Guide
 
-**Version**: 0.9.0
+**Version**: 1.0.0
 **Last Updated**: 2026-04-25
 
 This guide explains how to build and use the debug version of NoisePQC++ to observe detailed state transitions during Noise Protocol handshakes, including classical, post-quantum (PQ), and hybrid forward secrecy (HFS) patterns.
@@ -97,7 +97,7 @@ NoisePQC++ supports two build modes controlled by the `NOISE_DEBUG_BUILD` CMake 
 ```bash
 # Configure debug build
 cmake -B build-debug -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake \
   -DNOISE_DEBUG_BUILD=ON
 
 # Build
@@ -110,17 +110,17 @@ cd build-debug/examples
 
 ### Platform-Specific Debug Builds
 
-#### Linux (Clang 18)
+#### Linux (Clang 21)
 
 ```bash
 cmake -B build-debug -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-linux-toolchain.cmake \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-linux-toolchain.cmake \
   -DNOISE_DEBUG_BUILD=ON
 
 cmake --build build-debug
 ```
 
-#### Linux (GCC 15.2)
+#### Linux (GCC 15.2+)
 
 ```bash
 cmake -B build-debug -S . -G Ninja \
@@ -130,22 +130,24 @@ cmake -B build-debug -S . -G Ninja \
 cmake --build build-debug
 ```
 
-#### Raspberry Pi (ARM64)
+#### Raspberry Pi 5 (ARM64)
+
+Uses the same shared Linux Clang toolchain file as the other Linux hosts:
 
 ```bash
 cmake -B build-debug -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-rasPi-toolchain.cmake \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-linux-toolchain.cmake \
   -DNOISE_DEBUG_BUILD=ON
 
 # Use fewer parallel jobs to avoid memory issues
 cmake --build build-debug -j2
 ```
 
-#### macOS (Intel/Apple Silicon)
+#### macOS (Apple Silicon; Intel untested)
 
 ```bash
 cmake -B build-debug -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake \
   -DNOISE_DEBUG_BUILD=ON
 
 cmake --build build-debug
@@ -933,6 +935,6 @@ The NoisePQC++ debug logging system provides:
 - [Pattern Guide](PatternGuide.md) - Noise pattern selection guide
 - [examples/README.md](../examples/README.md) - Example programs
 
-**Version**: NoisePQC++ v0.9.0
-**Botan**: 3.11.1
+**Version**: NoisePQC++ v1.0.0
+**Botan**: 3.13.0
 **Catch2**: v3.11.0

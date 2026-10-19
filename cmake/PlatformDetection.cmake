@@ -4,23 +4,13 @@
 # Detects the operating system and processor architecture,
 # then sets PLATFORM_DIR for platform-specific configurations.
 
-# Helper function to add macOS std module target. Necessary for C++20 `import std;` support in CLion on macOS.
-function(add_mac_std_module_target base_dir)
-    add_library(unused_std_target STATIC)
-    target_sources(unused_std_target
-        PRIVATE
-        FILE_SET CXX_MODULES
-        BASE_DIRS ${base_dir}
-        FILES ${base_dir}/std.cppm ${base_dir}/std.compat.cppm)
-endfunction()
-
 if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
     # Target: Windows 11 (x86_64)
     message(STATUS "Configuring for Windows x64")
     set(PLATFORM_DIR "plat_win_x86")
 
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    # Targets: macOS (Intel and Apple Silicon)
+    # Targets: macOS (Apple Silicon; Intel builds but is untested as of 1.0.0)
     message(STATUS "Detected macOS processor: '${CMAKE_SYSTEM_PROCESSOR}'")
 
     if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR
@@ -30,16 +20,15 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         # Apple Silicon Mac (including M4)
         message(STATUS "Configuring for macOS Apple Silicon (arm64)")
         set(PLATFORM_DIR "plat_mac_arm64")
-        # For Mac CLion C++23 import std; modules support
-        add_mac_std_module_target(/opt/homebrew/opt/llvm@18/share/libc++/v1)
 
     elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR
             CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
-        # Intel Mac
+        # Intel Mac: untested as of 1.0.0; plat_mac_x86 will be removed in a future release
         message(STATUS "Configuring for macOS Intel (x86_64)")
+        message(WARNING "macOS on Intel (x86_64) is untested as of NoisePQC++ 1.0.0. "
+                "The build should work, pinned to the macOS 26 SDK. The Intel Botan sources "
+                "(third_party/botan/plat_mac_x86) will be removed in a future release.")
         set(PLATFORM_DIR "plat_mac_x86")
-        # For Mac CLion C++23 import std; modules support
-        add_mac_std_module_target(/usr/local/opt/llvm@18/share/libc++/v1)
 
     else ()
         message(FATAL_ERROR "Unsupported macOS processor: '${CMAKE_SYSTEM_PROCESSOR}', CMAKE_OSX_ARCHITECTURES: '${CMAKE_OSX_ARCHITECTURES}'")

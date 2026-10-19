@@ -11,8 +11,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-BUILD_DIR="$PROJECT_ROOT/cmake-build-release-clang-18"
-TOOLCHAIN="$PROJECT_ROOT/cmake/clang18-macOS-toolchain.cmake"
+BUILD_DIR="$PROJECT_ROOT/cmake-build-release-clang-21"
+TOOLCHAIN="$PROJECT_ROOT/cmake/clang21-macOS-toolchain.cmake"
 BIN_DIR="$PROJECT_ROOT/bin/Release/benchmarks"
 NET_BIN="$BIN_DIR/network"
 DATA_DIR="$PROJECT_ROOT/analysis/data"

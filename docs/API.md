@@ -1,9 +1,9 @@
 # API Reference
 
-**Version**: 0.9.0
+**Version**: 1.0.0
 **Last Updated**: 2026-04-25
 
-This document provides a comprehensive reference for the NoisePQC++ v0.9.0 public API, including classical, post-quantum (PQNoise), and hybrid forward secrecy (HFS) features.
+This document provides a comprehensive reference for the NoisePQC++ v1.0.0 public API, including classical, post-quantum (PQNoise), and hybrid forward secrecy (HFS) features.
 
 ## Table of Contents
 

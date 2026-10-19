@@ -2,6 +2,69 @@
 
 All notable changes to NoisePQC++ will be documented in this file.
 
+## [1.0.0] - 2026-10-19
+
+First stable release. NoisePQC++ 1.0.0 completes the toolchain
+modernization: Clang 21, GCC 15.2, CMake 4.3, and Botan 3.13.0
+across every supported platform, with all documentation brought in
+line.
+
+### Cryptographic Library
+- Upgraded Botan from 3.11.1 to 3.13.0; refreshed minimized build
+  sources for all six platform targets (macOS x86_64/ARM64,
+  Linux x86_64/ARM64 Clang and GCC, Windows x86_64)
+
+### Toolchain & Build System
+- Migrated from Clang 18 to Clang 21 (21.1.x) on macOS and Linux
+- CMake requirement raised from 4.0 to 4.3; `import std;` experimental
+  gate updated for the CMake 4.3.x series
+- Consolidated toolchain files:
+  - `clang21-macOS-toolchain.cmake` — one file for Apple Silicon and
+    Intel; selects the Homebrew LLVM 21 prefix by architecture
+  - `clang21-linux-toolchain.cmake` — one file for Linux x86_64,
+    ARM64, and Raspberry Pi 5 (Ubuntu 26.04 / Debian Trixie packages)
+  - `gcc15-linux-toolchain.cmake` — simplified to target Ubuntu 26.04's
+    native `gcc-15`/`g++-15` distro packages
+  - Removed the separate Raspberry Pi and MSVC toolchain files
+    (Windows needs no toolchain file)
+- `import std;` discovery now handled directly via
+  `CMAKE_CXX_STDLIB_MODULES_JSON` — the previous macOS Homebrew Clang
+  workarounds (resource-dir hints, CMake module patching) are no
+  longer needed
+- macOS SDK pinned to the Command Line Tools `MacOSX26.sdk`, the SDK
+  Homebrew LLVM 21's own config uses: `clang-scan-deps` 21 needs an
+  explicit sysroot, and SDK 27 (Xcode 27.1) is incompatible with
+  LLVM 21's libc++ headers
+- Benchmark automation script updated to the Clang 21 toolchain
+
+### Platform Support
+- Linux (x86_64, ARM64) with Clang 21.1.x and GCC 15.2 — verified on
+  Ubuntu 26.04
+- Raspberry Pi 5 (ARM64, Debian Trixie) with Clang 21.1.x from
+  trixie-backports — full test suite verified
+- macOS (ARM64) with Homebrew LLVM 21 and the macOS 26 SDK — verified
+  on Apple Silicon
+- macOS (x86_64, Intel) — **untested**: the build should work, pinned
+  to the macOS 26 SDK, but it was not verified for this release. The
+  Intel Botan sources (`third_party/botan/plat_mac_x86/`) will be
+  removed in a future release
+- Windows (x86_64) with MSVC 19.44+ and CMake 4.3+
+
+### Container Images
+- New Ubuntu 26.04 Docker images with CMake 4.3.5 added alongside the
+  existing ones: `docker/clang21-ubuntu26/` (Clang 21; amd64 + arm64)
+  and `docker/gcc15-ubuntu26/` (GCC 15.2 distro packages; amd64 only).
+  The 0.9.0 Debian Trixie images (`docker/clang18-linux/`,
+  `docker/gcc15-linux/`) are retained unchanged as the paper-pinned
+  artifact
+
+### Documentation
+- Full documentation sweep for the new toolchain: main README,
+  BuildGuide, BenchmarkingGuide, LoggingAndDebugging, Architecture,
+  DockerGuide, and the examples/tests/benchmarks READMEs
+- Removed obsolete Clang 18 `import std;` workaround instructions
+- Rewrote the GCC build path for Ubuntu 26.04 (`build-essential`)
+
 ## [0.9.0] - 2026-04-25
 
 First public release of NoisePQC++.

@@ -1,6 +1,6 @@
 # Architecture
 
-**Version**: 0.9.0
+**Version**: 1.0.0
 **Last Updated**: 2026-04-25
 
 This document describes the architecture and design of the NoisePQC++ library.
@@ -49,7 +49,7 @@ At a high level, the implementation separates cryptographic primitives (DH/KEM, 
 ├─────────────────────────────────────────────────────────────────┤
 │                  External Cryptographic Library                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │                    Botan 3.11.1                            │  │
+│  │                    Botan 3.13.0                            │  │
 │  └───────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -166,7 +166,7 @@ Unifies classical Diffie-Hellman and post-quantum KEM operations behind one inte
 
 Represents handshake patterns as token sequences grouped by message. NoisePQC++ includes all standard classical Noise patterns, the published PQNoise patterns, and labeled HFS variants. Pattern definitions also encode hybrid behavior by combining classical and PQ tokens in a single declarative structure. The module validates token ordering and other pattern constraints before execution.
 
-**NoisePQC++ v0.9.0 implements all Noise patterns including PQ and HFS**:
+**NoisePQC++ v1.0.0 implements all Noise patterns including PQ and HFS**:
 
 **Classical Patterns (57 Total)**:
 
@@ -454,14 +454,14 @@ All cryptographic operations are delegated to **Botan**:
 - Memory wiping
 
 **Platform Support**:
-- macOS x86_64
+- macOS ARM64 (Apple Silicon); macOS x86_64 untested
 - Linux x86_64
 - Linux ARM64 (Raspberry Pi)
 - Windows x86_64
 
-## Current Status (v0.9.0)
+## Current Status (v1.0.0)
 
-NoisePQC++ v0.9.0 represents a **complete implementation** of the Noise Protocol Framework with Post-Quantum Cryptography (PQC) and Hybrid Forward Secrecy (HFS) support, featuring performance-optimized direct buffer operations and comprehensive benchmarking capabilities.
+NoisePQC++ v1.0.0 represents a **complete implementation** of the Noise Protocol Framework with Post-Quantum Cryptography (PQC) and Hybrid Forward Secrecy (HFS) support, featuring performance-optimized direct buffer operations and comprehensive benchmarking capabilities.
 
 **Completed Features**:
 - ✅ All 57 classical Noise handshake patterns (one-way, interactive, deferred, PSK)
@@ -490,8 +490,8 @@ NoisePQC++ v0.9.0 represents a **complete implementation** of the Noise Protocol
 ## Dependencies
 
 ```
-NoisePQC++ v0.9.0
-├── Botan 3.10.0 (third_party/botan/)
+NoisePQC++ v1.0.0
+├── Botan 3.13.0 (third_party/botan/)
 │   ├── ChaCha20-Poly1305 (AEAD cipher)
 │   ├── AES-256-GCM (AEAD cipher)
 │   ├── SHA-256/512 (hash functions)
@@ -514,14 +514,14 @@ Networking Examples
 ```
 
 **Build System**:
-- CMake 4.0+ (required for C++ modules)
+- CMake 4.3+ (required for C++ modules)
 - Ninja (required for C++ modules)
-- Clang 18+ or GCC 15.2+ or MSVC 19.44+
+- Clang 21+ or GCC 15.2+ or MSVC 19.44+
 
-**Platform-Specific Botan 3.11.1 Builds**:
+**Platform-Specific Botan 3.13.0 Builds**:
 Minimized build source included for:
-- macOS (x86_64, ARM64) with Clang 18
-- Linux (x86_64, ARM64) with Clang 18 and GCC 15.2
+- macOS (ARM64) with Clang 21; x86_64 (Intel) included but untested, to be removed in a future release
+- Linux (x86_64, ARM64) with Clang 21 and GCC 15.2
 - Windows (x86_64) with MSVC 19.44+
 
 ## Performance Characteristics

@@ -1,9 +1,15 @@
 cff-version: 1.2.0
 message: "If you use this software in your research, please cite it as below."
 title: "NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography"
-version: "0.9.0"
-doi: "10.5281/zenodo.19782168"
-date-released: 2026-04-25
+version: "1.0.0"
+date-released: 2026-10-19
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.19782169
+    description: "Archived v0.9.0 release — the citable artifact for the accompanying paper"
+  - type: doi
+    value: 10.5281/zenodo.19782168
+    description: "Zenodo concept DOI — always resolves to the latest archived version"
 authors:
   - family-names: Ahmed
     given-names: Nadeem
@@ -37,7 +43,7 @@ preferred-citation:
   title: "NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography"
   year: 2026
   version: "0.9.0"
-  doi: "10.5281/zenodo.19782168"
+  doi: "10.5281/zenodo.19782169"
   url: "https://github.com/nata11/NoisePQCpp"
 references:
   - type: standard

@@ -6,7 +6,7 @@
 # Project metadata
 #---------------------------------------------------------------------------
 PROJECT_NAME           = "NoisePQC++"
-PROJECT_NUMBER         = "0.9.0"
+PROJECT_NUMBER         = "1.0.0"
 PROJECT_BRIEF          = "C++23 Noise Protocol Framework with Post-Quantum Cryptography and Hybrid Forward Secrecy"
 PROJECT_LOGO           =
 OUTPUT_DIRECTORY       = docs/api-reference

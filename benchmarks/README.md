@@ -99,8 +99,8 @@ Simple benchmark example demonstrating Google Benchmark usage with NoisePQC++.
 
 ### Prerequisites
 
-- **C++23 Compiler**: Clang 18+, GCC 15.2+, or MSVC 19.44+
-- **CMake** 4.0+
+- **C++23 Compiler**: Clang 21+, GCC 15.2+, or MSVC 19.44+
+- **CMake** 4.3+
 - **Ninja** build system
 - **Google Benchmark** (automatically downloaded via FetchContent)
 
@@ -111,7 +111,7 @@ Simple benchmark example demonstrating Google Benchmark usage with NoisePQC++.
 ```bash
 # Configure with Multi-Config Ninja generator
 cmake -B cmake-build-release -S . -G "Ninja Multi-Config" \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake
 
 # Build all benchmarks in Release mode
 cmake --build cmake-build-release --config Release
@@ -328,6 +328,6 @@ python3 scripts/analyze_network_results.py \
 
 ---
 
-**Version**: NoisePQC++ v0.9.0
+**Version**: NoisePQC++ v1.0.0
 **Last Updated**: 2026-04-25
 **Google Benchmark**: v1.9.1 (auto-downloaded)

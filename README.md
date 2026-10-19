@@ -17,7 +17,7 @@ NoisePQC++ is a modern, type-safe implementation of the [Noise Protocol Framewor
 - **Complete Noise Protocol**: Full support for all 57 classical Noise handshake patterns (15 base + 21 deferred + 21 PSK)
 - **Post-Quantum Ready**: ML-KEM (CRYSTALS-Kyber) support with pqXX, pqNK, and other PQ patterns
 - **Hybrid Forward Secrecy**: HFS patterns combining classical DH with post-quantum KEM
-- **Cross-Platform**: Supports macOS (x86_64, ARM64), Linux (x86_64, ARM64), and Windows (x86_64)
+- **Cross-Platform**: Supports macOS (ARM64, Apple Silicon; x86_64 Intel untested), Linux (x86_64, ARM64), and Windows (x86_64)
 - **Well-Tested**: Comprehensive test suite with 200+ test cases and 500+ assertions
 - **Modular Design**: Clean separation between cipher, hash, DH, KEM, and state management
 - **ASIO Networking Examples**: Ready-to-use TCP client/server examples with Noise Protocol
@@ -91,35 +91,35 @@ All classical, PQ, and HFS patterns are implemented and covered by automated tes
 ### Prerequisites
 
 - **C++23 Compiler**:
-  - Clang 18.1.8 (Required for C++ modules and "import std;". Tested on macOS (Intel & Apple Silicon), Linux (x86_64, Raspberry Pi 5 ARM64)
+  - Clang 21.1.x (Required for C++ modules and "import std;". Tested on macOS (Apple Silicon), Linux (x86_64, ARM64, Raspberry Pi 5 ARM64)
   - MSVC 19.44+ (Visual Studio 2022 Update 17+ for Windows 11)
   - GCC 15.2.0 (Required for C++ modules and "import std;". Tested on Linux x86_64)
-- **CMake** 4.0+
+- **CMake** 4.3+ (required for `import std;` support)
 - **Ninja** build system (required for C++ modules)
 - **Catch2** v3.11.0 (automatically downloaded via CMake FetchContent if not found system-wide)
 - **ASIO** (standalone, non-Boost) for networking examples (automatically downloaded via CMake FetchContent if not found system-wide)
-- **Botan** 3.11.1 (included in `third_party/` for multiple platforms)
+- **Botan** 3.13.0 (included in `third_party/` for multiple platforms)
 
 ### Build Instructions
 
 **Note**: On first CMake run, Catch2 and Google Benchmark will be automatically downloaded via FetchContent if not found system-wide.
 
-**Pre-built Botan 3.11.1** minimized build sources are provided in `third_party/` for:
-- **macOS**: x86_64 (Intel) and ARM64 (Apple Silicon) with Clang 18
-- **Linux**: x86_64 and ARM64 with GCC 15.2 and Clang 18
+**Pre-built Botan 3.13.0** minimized build sources are provided in `third_party/` for:
+- **macOS**: ARM64 (Apple Silicon) with Clang 21; x86_64 (Intel) is included but untested, and will be removed in a future release
+- **Linux**: x86_64 and ARM64 with GCC 15.2 and Clang 21
 - **Windows**: x86_64 with MSVC 19.44+
 
 ```bash
 # Configure with Ninja (required for C++ modules)
 # Use the appropriate toolchain file for your platform:
-#   - macOS (Intel/Apple Silicon): cmake/clang18-macOS-toolchain.cmake
-#   - Linux (Clang 18): cmake/clang18-linux-toolchain.cmake
-#   - Linux (GCC 15): cmake/gcc15-linux-toolchain.cmake
-#   - Raspberry Pi (ARM64): cmake/clang18-rasPi-toolchain.cmake
+#   - macOS (Apple Silicon; Intel untested): cmake/clang21-macOS-toolchain.cmake
+#   - Linux incl. Raspberry Pi 5 (Clang 21): cmake/clang21-linux-toolchain.cmake
+#   - Linux (GCC 15.2+): cmake/gcc15-linux-toolchain.cmake
+#   - Windows (MSVC): no toolchain file needed
 
-# Example for Linux (Clang 18):
+# Example for Linux (Clang 21):
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-linux-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-linux-toolchain.cmake
 
 # Build (Catch2 will download on first run if needed)
 cmake --build build
@@ -129,20 +129,20 @@ cd build
 ctest --output-on-failure
 ```
 
-### Linux (Clang 18)
+### Linux (Clang 21)
 
-**Supported Architectures**: x86_64 and ARM64 (tested on Debian Trixie/Ubuntu 24.04 x86_64 and Raspberry Pi 5)
+**Supported Architectures**: x86_64 and ARM64 (tested on Ubuntu 26.04 x86_64/ARM64 and Raspberry Pi 5 on Debian Trixie)
 
 ```bash
 # Install dependencies. See cmake note in BuildGuide.md for experimental import std module support.
 sudo apt update
-sudo apt install cmake ninja-build clang-18 libc++-18-dev libc++abi-18-dev
+sudo apt install cmake ninja-build clang-21 libc++-21-dev libc++abi-21-dev
 
 # Configure with the Linux Clang toolchain file
 # The toolchain file handles: compiler paths, libc++, headers, and linker flags
 # Run cmake command below from inside the repository root directory (where CMakeLists.txt is located)
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-linux-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-linux-toolchain.cmake
 
 # Build
 cmake --build build -j$(nproc)
@@ -150,7 +150,7 @@ cmake --build build -j$(nproc)
 # Run tests
 ctest --test-dir build --output-on-failure
 ```
-For platform-specific instructions (macOS, Raspberry Pi, GCC 15, Windows, Docker) and advanced build options, see [docs/BuildGuide.md](docs/BuildGuide.md).
+For platform-specific instructions (macOS, Raspberry Pi, GCC 15.2+, Windows, Docker) and advanced build options, see [docs/BuildGuide.md](docs/BuildGuide.md).
 
 ## Testing
 
@@ -318,9 +318,9 @@ Comprehensive documentation is available in the [docs/](docs/) directory:
 
 ## Development Status
 
-**Current Version**: 0.9.0 (Performance Optimized PQC + HFS Noise Protocol Framework)
+**Current Version**: 1.0.0 (Performance Optimized PQC + HFS Noise Protocol Framework)
 
-This release includes complete implementations of classical Noise, Post-Quantum Noise (PQNoise), and Hybrid Forward Secrecy (HFS) patterns, providing quantum-resistant cryptographic options alongside classical primitives. Version 0.9.0 introduces significant performance optimizations with direct buffer operations and comprehensive benchmarking tools.
+This release includes complete implementations of classical Noise, Post-Quantum Noise (PQNoise), and Hybrid Forward Secrecy (HFS) patterns, providing quantum-resistant cryptographic options alongside classical primitives. Version 1.0.0 is the first stable release and completes the toolchain modernization: Clang 21, GCC 15.2, CMake 4.3, and Botan 3.13.0 across every supported platform, with all documentation brought in line.
 
 Implemented components:
 
@@ -372,13 +372,13 @@ Suggested BibTeX:
   title        = {NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography},
   year         = {2026},
   url          = {https://github.com/nata11/NoisePQCpp},
-  version      = {0.9.0}
+  version      = {1.0.0}
 }
 ```
 
 Suggested text citation:
 
-> Ahmed, Nadeem (2026). _NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography._ Version 0.9.0, 2026 https://github.com/nata11/NoisePQCpp
+> Ahmed, Nadeem (2026). _NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography._ Version 1.0.0, 2026 https://github.com/nata11/NoisePQCpp
 
 For reproducibility in scholarly work, please also record the exact version,
 release tag, or commit hash used in your experiments.
@@ -398,6 +398,6 @@ its own license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 ## Acknowledgments
 
 Built with:
-- [Botan 3.11.1](https://botan.randombit.net/) - Cryptographic primitives
+- [Botan 3.13.0](https://botan.randombit.net/) - Cryptographic primitives
 - [Catch2 v3.11.0](https://github.com/catchorg/Catch2) - Testing framework
 - [Google Benchmark](https://github.com/google/benchmark) - Micro benchmarking

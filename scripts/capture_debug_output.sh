@@ -154,7 +154,7 @@ if [[ ! -x "${PATTERN_ZOO}" ]]; then
     echo "  ${PATTERN_ZOO}"
     echo ""
     echo "Build it with:"
-    echo "  cmake --build cmake-build-debug-clang-18 --target pattern_zoo"
+    echo "  cmake --build cmake-build-debug-clang-21 --target pattern_zoo"
     exit 1
 fi
 

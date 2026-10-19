@@ -24,15 +24,15 @@ These examples show how to integrate the Noise Protocol Framework with real netw
 ## Prerequisites
 
 - NoisePQC++ library built with ASIO support
-- CMake 4.0+
-- C++23 compatible compiler (Clang 18+, GCC 15.2+, MSVC 19.44+)
+- CMake 4.3+
+- C++23 compatible compiler (Clang 21+, GCC 15.2+, MSVC 19.44+)
 
 ## Building
 
 ```bash
 # From project root, configure and build
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake
 
 cmake --build build
 
@@ -222,4 +222,4 @@ lsof -i :12345
 
 ---
 
-**Version**: NoisePQC++ v0.9.0
+**Version**: NoisePQC++ v1.0.0

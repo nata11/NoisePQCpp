@@ -51,7 +51,7 @@ To disable benchmarks (skips Google Benchmark download entirely):
 
 ```bash
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake \
   -DCMAKE_BUILD_TYPE=Release \
   -DNOISEPQC_BUILD_BENCHMARKS=OFF
 ```
@@ -89,7 +89,7 @@ FetchContent configuration:
 ```bash
 # Configure — Release is required for benchmarks
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake \
   -DCMAKE_BUILD_TYPE=Release
 
 # Build all targets (includes benchmarks)
@@ -104,7 +104,7 @@ cmake --build build --target bench_handshake
 ```bash
 # Configure — no CMAKE_BUILD_TYPE needed
 cmake -B build -S . -G "Ninja Multi-Config" \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake
 
 # Build benchmarks in Release configuration
 cmake --build build --config Release
@@ -217,7 +217,7 @@ Figures are saved to `analysis/figures/`. For the complete automated workflow de
 
 ```bash
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake \
   -DCMAKE_BUILD_TYPE=Release
 ```
 
@@ -243,7 +243,7 @@ Or use a multi-config generator and build with `--config Release`.
 ```bash
 rm -rf build
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake \
   -DCMAKE_BUILD_TYPE=Release \
   -DNOISEPQC_BUILD_BENCHMARKS=ON
 cmake --build build

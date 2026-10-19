@@ -1,6 +1,6 @@
 # NoisePQC++ Test Suite
 
-This directory contains the comprehensive test suite for NoisePQC++ v0.9.0 using Catch2 v3.11.0.
+This directory contains the comprehensive test suite for NoisePQC++ v1.0.0 using Catch2 v3.11.0.
 
 **Total Test Coverage**: 200+ test cases with 500+ assertions across all Noise Protocol Framework components, including classical, post-quantum, and hybrid patterns.
 
@@ -34,19 +34,18 @@ tests/
 # From project root
 
 # Configure with the appropriate toolchain file for your platform:
-#   - macOS (Intel/Apple Silicon): cmake/clang18-macOS-toolchain.cmake
-#   - Linux (Clang 18): cmake/clang18-linux-toolchain.cmake
-#   - Linux (GCC 15): cmake/gcc15-linux-toolchain.cmake
-#   - Raspberry Pi (ARM64): cmake/clang18-rasPi-toolchain.cmake
+#   - macOS (Apple Silicon; Intel untested): cmake/clang21-macOS-toolchain.cmake
+#   - Linux incl. Raspberry Pi 5 (Clang 21): cmake/clang21-linux-toolchain.cmake
+#   - Linux (GCC 15.2+): cmake/gcc15-linux-toolchain.cmake
 #   - Windows (MSVC): No toolchain file needed
 
 # Example for macOS:
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-macOS-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake
 
 # Example for Linux with Clang:
 cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang18-linux-toolchain.cmake
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-linux-toolchain.cmake
 
 # Build all targets (Catch2 downloads automatically if needed)
 cmake --build build
