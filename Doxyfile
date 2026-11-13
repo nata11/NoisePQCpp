@@ -6,7 +6,7 @@
 # Project metadata
 #---------------------------------------------------------------------------
 PROJECT_NAME           = "NoisePQC++"
-PROJECT_NUMBER         = "1.0.0"
+PROJECT_NUMBER         = "1.1.0"
 PROJECT_BRIEF          = "C++23 Noise Protocol Framework with Post-Quantum Cryptography and Hybrid Forward Secrecy"
 PROJECT_LOGO           =
 OUTPUT_DIRECTORY       = docs/api-reference
@@ -45,8 +45,8 @@ REPEAT_BRIEF           = YES
 ALWAYS_DETAILED_SEC    = NO
 INLINE_INHERITED_MEMB  = NO
 FULL_PATH_NAMES        = YES
-STRIP_FROM_PATH        = /Users/nahmed/CLionProjects/NoisePQC++
-STRIP_FROM_INC_PATH    = /Users/nahmed/CLionProjects/NoisePQC++
+STRIP_FROM_PATH        = .
+STRIP_FROM_INC_PATH    = .
 TAB_SIZE               = 4
 MARKDOWN_SUPPORT       = YES
 AUTOLINK_SUPPORT       = YES

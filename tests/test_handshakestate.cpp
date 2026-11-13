@@ -19,7 +19,7 @@
 //
 
 //
-// HandshakeState Module Tests using Catch2 v3.11
+// HandshakeState Module Tests using Catch2 v3
 //
 
 #include <catch2/catch_test_macros.hpp>
@@ -651,6 +651,82 @@ TEST_CASE("HandshakeState - Reading message exceeding max size throws error", "[
 // ================================
 // HandshakeStatus Tests
 // ================================
+
+TEST_CASE("HandshakeState - Tampered message throws DecryptionError and stays failed", "[handshakestate][error][decryption]") {
+    Protocol protocol(XX, X25519, ChaChaPoly, SHA256);
+
+    auto aliceStatic = protocol.dh.GenerateKeypair();
+    auto bobStatic = protocol.dh.GenerateKeypair();
+
+    HandshakeConfig aliceCfg{
+        .protocol = protocol,
+        .isInitiator = true,
+        .localStatic = aliceStatic
+    };
+    HandshakeConfig bobCfg{
+        .protocol = protocol,
+        .isInitiator = false,
+        .localStatic = bobStatic
+    };
+
+    HandshakeState aliceHs(aliceCfg);
+    HandshakeState bobHs(bobCfg);
+
+    // -> e            (plaintext)
+    auto msg1 = aliceHs.WriteMessage({});
+    bobHs.ReadMessage(msg1);
+
+    // <- e, ee, s, es (first encrypted message)
+    auto msg2 = bobHs.WriteMessage({});
+    aliceHs.ReadMessage(msg2);
+
+    // -> s, se        (the initiator's second message; bob reads it)
+    auto msg3 = aliceHs.WriteMessage({});
+    auto tampered = msg3;
+    tampered.back() ^= 0x01;
+
+    REQUIRE_THROWS_AS(bobHs.ReadMessage(tampered), DecryptionError);
+    REQUIRE(bobHs.GetStatus().HasError());
+    REQUIRE_FALSE(bobHs.GetStatus().IsComplete());
+
+    // The error is sticky: the genuine message is refused with the same type
+    REQUIRE_THROWS_AS(bobHs.ReadMessage(msg3), DecryptionError);
+    REQUIRE(bobHs.GetStatus().HasError());
+}
+
+TEST_CASE("HandshakeState - Low-order DH key throws InvalidPublicKeyError", "[handshakestate][error][invalidkey]") {
+    // NN: -> e / <- e, ee. The initiator reads a message 2 whose e is the all-zero point, a
+    // low-order point (RFC 7748 Section 6.1/6.2: the shared secret is all zeros and the key
+    // agreement rejects it), followed by 16 junk bytes where the payload tag would be.
+    auto run = [](const std::string_view dhAlgo) {
+        Protocol protocol(NN, dhAlgo, ChaChaPoly, SHA256);
+
+        HandshakeConfig aliceCfg{.protocol = protocol, .isInitiator = true};
+        HandshakeConfig bobCfg{.protocol = protocol, .isInitiator = false};
+        HandshakeState aliceHs(aliceCfg);
+        HandshakeState bobHs(bobCfg);
+
+        // -> e
+        auto msg1 = aliceHs.WriteMessage({});
+        bobHs.ReadMessage(msg1);
+
+        // <- e, ee   with e = zeros, then 16 junk bytes
+        std::vector<std::uint8_t> badMsg2(protocol.dh.PublicKeySize(), 0x00);
+        badMsg2.insert(badMsg2.end(), 16, 0xA5);
+
+        REQUIRE_THROWS_AS(aliceHs.ReadMessage(badMsg2), InvalidPublicKeyError);
+        REQUIRE(aliceHs.GetStatus().HasError());
+        REQUIRE_FALSE(aliceHs.GetStatus().IsComplete());
+
+        // The error is sticky: the genuine message 2 is refused with the same type
+        auto msg2 = bobHs.WriteMessage({});
+        REQUIRE_THROWS_AS(aliceHs.ReadMessage(msg2), InvalidPublicKeyError);
+        REQUIRE(aliceHs.GetStatus().HasError());
+    };
+
+    SECTION("X25519 (32-byte key)") { run(X25519); }
+    SECTION("X448 (56-byte key)") { run(X448); }
+}
 
 TEST_CASE("HandshakeStatus - IsComplete returns false during handshake", "[handshakestate][status]") {
     Protocol protocol(XX, X25519, ChaChaPoly, SHA256);
@@ -2336,6 +2412,190 @@ TEST_CASE("HandshakeState - HFS NKhfs with 448+M1024", "[handshakestate][hfs][nk
     };
 
     test_hfs_pattern_handshake(config);
+}
+
+// ================================
+// Concurrency Tests
+// ================================
+
+TEST_CASE("HandshakeState - handshakes from one Protocol on two threads", "[handshakestate][thread]") {
+    // One Protocol shared by two threads, each running complete NN handshakes built from it.
+    // The library must not mutate the Protocol (its Hash in particular) during a handshake.
+    // In the ordinary suite this is a smoke test; it is also meant to be run under
+    // ThreadSanitizer. No Catch2 macro runs inside a thread: each thread counts its own
+    // failures and completed handshakes, and the assertions follow the joins.
+    const Protocol protocol{"Noise_NN_25519_ChaChaPoly_SHA256"};
+    constexpr int kHandshakesPerThread = 1000;
+
+    std::array<int, 2> failures{0, 0};
+    std::array<int, 2> completed{0, 0};
+
+    const auto worker = [&protocol](int& failureCount, int& completedCount) {
+        const std::vector<std::uint8_t> payload{'p', 'i', 'n', 'g'};
+        for (int i = 0; i < kHandshakesPerThread; ++i) {
+            try {
+                const HandshakeConfig initiatorCfg{.protocol = protocol, .isInitiator = true};
+                const HandshakeConfig responderCfg{.protocol = protocol, .isInitiator = false};
+                HandshakeState initiator{initiatorCfg};
+                HandshakeState responder{responderCfg};
+
+                const auto msg1 = initiator.WriteMessage({});
+                (void)responder.ReadMessage(msg1);
+                const auto msg2 = responder.WriteMessage({});
+                (void)initiator.ReadMessage(msg2);
+
+                const auto& initiatorStatus = initiator.GetStatus();
+                const auto& responderStatus = responder.GetStatus();
+                bool ok = initiatorStatus.IsComplete() && responderStatus.IsComplete() &&
+                          initiatorStatus.handshakeHash == responderStatus.handshakeHash &&
+                          initiatorStatus.cipherStates.has_value() && responderStatus.cipherStates.has_value();
+                if (ok) {
+                    // One transport message: initiator cs1 encrypts, responder cs1 decrypts.
+                    auto tx = initiatorStatus.cipherStates->first;
+                    auto rx = responderStatus.cipherStates->first;
+                    const auto ciphertext = tx.EncryptWithAd({}, payload);
+                    ok = rx.DecryptWithAd({}, ciphertext) == payload;
+                }
+                if (ok) {
+                    ++completedCount;
+                } else {
+                    ++failureCount;
+                }
+            } catch (...) {
+                ++failureCount;
+            }
+        }
+    };
+
+    {
+        std::jthread first{worker, std::ref(failures[0]), std::ref(completed[0])};
+        std::jthread second{worker, std::ref(failures[1]), std::ref(completed[1])};
+    }
+
+    REQUIRE(failures[0] == 0);
+    REQUIRE(failures[1] == 0);
+    REQUIRE(completed[0] == kHandshakesPerThread);
+    REQUIRE(completed[1] == kHandshakesPerThread);
+}
+
+// ============================================================================
+// Completion path: TakeCipherStates() and HandshakeStatus::state
+// ============================================================================
+
+TEST_CASE("HandshakeState - TakeCipherStates moves the transport states out", "[handshakestate][completion][take]") {
+    Protocol protocol(XX, X25519, ChaChaPoly, SHA256);
+    auto aliceStatic = protocol.dh.GenerateKeypair();
+    auto bobStatic = protocol.dh.GenerateKeypair();
+    HandshakeConfig aliceCfg{.protocol = protocol, .isInitiator = true, .localStatic = aliceStatic};
+    HandshakeConfig bobCfg{.protocol = protocol, .isInitiator = false, .localStatic = bobStatic};
+    HandshakeState alice(aliceCfg);
+    HandshakeState bob(bobCfg);
+
+    (void)bob.ReadMessage(alice.WriteMessage({}));
+    (void)alice.ReadMessage(bob.WriteMessage({}));
+    (void)bob.ReadMessage(alice.WriteMessage({}));
+    REQUIRE(alice.GetStatus().IsComplete());
+    REQUIRE(bob.GetStatus().IsComplete());
+
+    auto a = alice.TakeCipherStates();
+    auto b = bob.TakeCipherStates();
+    REQUIRE(a.has_value());
+    REQUIRE(b.has_value());
+
+    // cs1 carries initiator -> responder, cs2 responder -> initiator (Noise spec Section 5.2).
+    const std::vector<std::uint8_t> toBob{'t', 'o', ' ', 'b', 'o', 'b'};
+    const std::vector<std::uint8_t> toAlice{'t', 'o', ' ', 'a', 'l', 'i', 'c', 'e'};
+    CHECK(b->first.DecryptWithAd({}, a->first.EncryptWithAd({}, toBob)) == toBob);
+    CHECK(a->second.DecryptWithAd({}, b->second.EncryptWithAd({}, toAlice)) == toAlice);
+
+    // Taken once: the status no longer holds them, but the handshake is still complete.
+    CHECK_FALSE(alice.TakeCipherStates().has_value());
+    CHECK_FALSE(bob.TakeCipherStates().has_value());
+    CHECK_FALSE(alice.GetStatus().cipherStates.has_value());
+    CHECK_FALSE(bob.GetStatus().cipherStates.has_value());
+    CHECK(alice.GetStatus().IsComplete());
+    CHECK(bob.GetStatus().IsComplete());
+    CHECK(alice.GetStatus().handshakeHash == bob.GetStatus().handshakeHash);
+}
+
+TEST_CASE("HandshakeStatus - state tracks in progress, done and failed", "[handshakestate][completion][state]") {
+    Protocol protocol(XX, X25519, ChaChaPoly, SHA256);
+    auto aliceStatic = protocol.dh.GenerateKeypair();
+    auto bobStatic = protocol.dh.GenerateKeypair();
+    HandshakeConfig aliceCfg{.protocol = protocol, .isInitiator = true, .localStatic = aliceStatic};
+    HandshakeConfig bobCfg{.protocol = protocol, .isInitiator = false, .localStatic = bobStatic};
+
+    const auto checkInProgress = [](const HandshakeState& hs) {
+        CHECK(hs.GetStatus().state == HandshakeStatus::State::InProgress);
+        CHECK_FALSE(hs.GetStatus().IsComplete());
+        CHECK_FALSE(hs.GetStatus().HasError());
+        CHECK(hs.GetStatus().err == nullptr);
+    };
+    const auto checkDone = [](const HandshakeState& hs) {
+        CHECK(hs.GetStatus().state == HandshakeStatus::State::Done);
+        CHECK(hs.GetStatus().IsComplete());
+        CHECK_FALSE(hs.GetStatus().HasError());
+        // The documented tri-state is kept: err holds a HandshakeComplete on completion.
+        REQUIRE(hs.GetStatus().err != nullptr);
+        CHECK_THROWS_AS(std::rethrow_exception(hs.GetStatus().err), HandshakeComplete);
+    };
+
+    // A completing pair.
+    {
+        HandshakeState alice(aliceCfg);
+        HandshakeState bob(bobCfg);
+        checkInProgress(alice);
+        checkInProgress(bob);
+
+        (void)bob.ReadMessage(alice.WriteMessage({}));
+        checkInProgress(alice);
+        checkInProgress(bob);
+        (void)alice.ReadMessage(bob.WriteMessage({}));
+        (void)bob.ReadMessage(alice.WriteMessage({}));
+
+        checkDone(alice);
+        checkDone(bob);
+        // A further call rethrows the stored sentinel, as before.
+        CHECK_THROWS_AS(alice.ReadMessage(std::vector<std::uint8_t>{}), HandshakeComplete);
+        CHECK_THROWS_AS(bob.WriteMessage({}), HandshakeComplete);
+        checkDone(alice);
+        checkDone(bob);
+    }
+
+    // A failing pair: one ciphertext byte of message 2 flipped.
+    {
+        HandshakeState alice(aliceCfg);
+        HandshakeState bob(bobCfg);
+        (void)bob.ReadMessage(alice.WriteMessage({}));
+        auto msg2 = bob.WriteMessage({});
+        msg2.back() ^= 0x01;
+
+        REQUIRE_THROWS_AS(alice.ReadMessage(msg2), DecryptionError);
+        CHECK(alice.GetStatus().state == HandshakeStatus::State::Failed);
+        CHECK(alice.GetStatus().HasError());
+        CHECK_FALSE(alice.GetStatus().IsComplete());
+        CHECK_FALSE(alice.GetStatus().cipherStates.has_value());
+        REQUIRE(alice.GetStatus().err != nullptr);
+        CHECK_THROWS_AS(std::rethrow_exception(alice.GetStatus().err), DecryptionError);
+
+        // Sticky: the failure is rethrown on every later call, and the state stays Failed.
+        CHECK_THROWS_AS(alice.ReadMessage(msg2), DecryptionError);
+        CHECK_THROWS_AS(alice.WriteMessage({}), DecryptionError);
+        CHECK(alice.GetStatus().state == HandshakeStatus::State::Failed);
+
+        // Bob never saw the tampering and is still in progress.
+        checkInProgress(bob);
+    }
+}
+
+
+TEST_CASE("HandshakeState - a temporary HandshakeConfig does not compile", "[handshakestate][config][lifetime]") {
+    // A HandshakeState keeps a reference to its HandshakeConfig (and, through it, to
+    // the Protocol), so a temporary config would dangle at the end of the full expression. The
+    // rvalue overload is deleted; the lvalue overload is the only way to build a state.
+    static_assert(!std::is_constructible_v<HandshakeState, HandshakeConfig&&>);
+    static_assert(std::is_constructible_v<HandshakeState, const HandshakeConfig&>);
+    SUCCEED("HandshakeState(HandshakeConfig&&) is deleted; HandshakeState(const HandshakeConfig&) remains");
 }
 
 // Main function for Catch2

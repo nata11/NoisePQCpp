@@ -47,3 +47,8 @@ target_include_directories(alice PRIVATE ${CMAKE_SOURCE_DIR}/third_party/nlohman
 add_executable(bob bob.cpp)
 target_link_libraries(bob PRIVATE NoisePQC::noisepqc asio_static noisepqc_testdata)
 target_include_directories(bob PRIVATE ${CMAKE_SOURCE_DIR}/third_party/nlohmann)
+
+# Link-time optimization in Release configs (cmake/BuildConfig.cmake)
+foreach(TARGET_NAME noise_server noise_client noise_server_multi noise_client_multi alice bob)
+    noisepqc_optimize_target(${TARGET_NAME})
+endforeach()

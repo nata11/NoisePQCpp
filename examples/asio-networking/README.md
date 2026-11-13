@@ -23,9 +23,9 @@ These examples show how to integrate the Noise Protocol Framework with real netw
 
 ## Prerequisites
 
-- NoisePQC++ library built with ASIO support
+- asio 1.39.0 (standalone), downloaded automatically via CMake FetchContent
 - CMake 4.3+
-- C++23 compatible compiler (Clang 21+, GCC 15.2+, MSVC 19.44+)
+- C++23 compatible compiler (Clang 21, GCC 15.2+, MSVC 19.44+)
 
 ## Building
 
@@ -37,7 +37,7 @@ cmake -B build -S . -G Ninja \
 cmake --build build
 
 # Examples are located in:
-# build/examples/asio/   (or bin/examples/asio/)
+# build/bin/examples/asio/
 ```
 
 ## Running the Examples
@@ -46,10 +46,11 @@ cmake --build build
 
 ```bash
 # Terminal 1: Start the server
-cd build/examples/asio
+cd build/bin/examples/asio
 ./noise_server
 
 # Terminal 2: Connect with client
+cd build/bin/examples/asio
 ./noise_client
 ```
 
@@ -58,7 +59,7 @@ Expected flow:
 2. Client connects and initiates XX handshake
 3. Three handshake messages are exchanged
 4. Both sides derive matching transport keys
-5. Encrypted messages can be exchanged
+5. The client encrypts and sends each line you type, the server echoes it back, and `quit` ends the session
 
 ### Multi-Mode Client/Server
 
@@ -168,7 +169,7 @@ This ensures that if client and server disagree on mode, the handshake will fail
 
 All examples share `asio_common.hpp` which provides:
 
-- ASIO integration utilities
+- The basic examples' protocol name and default port (12345)
 - Byte conversion helpers
 - Hex printing functions
 - Message framing for TCP
@@ -198,8 +199,9 @@ If you see decryption errors, verify both sides use the same mode:
 
 The default port is 12345. If it's in use:
 ```bash
-# Wait for port to be released, or change the port in the source
-lsof -i :12345
+lsof -i :12345                           # what holds the port
+./noise_server 23456                     # or pass another port
+./noise_client localhost 23456
 ```
 
 ## Security Considerations
@@ -222,4 +224,4 @@ lsof -i :12345
 
 ---
 
-**Version**: NoisePQC++ v1.0.0
+**Version**: NoisePQC++ v1.1.0

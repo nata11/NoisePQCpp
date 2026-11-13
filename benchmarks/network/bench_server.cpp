@@ -84,7 +84,7 @@ public:
         }
     }
 
-    // Get the server's static public key (for pre-shared key scenarios)
+    // Get the server's static public key (for IK and KK, where the initiator knows it in advance)
     const PublicKey& get_static_public_key() const {
         return server_static_.public_key;
     }

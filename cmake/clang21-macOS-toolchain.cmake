@@ -1,24 +1,26 @@
-# CMake Toolchain file for Clang 21 on macOS (Homebrew LLVM), both architectures.
+# CMake Toolchain file for Clang 21 on macOS (Homebrew LLVM), Apple Silicon only.
 # This file configures the build to use the Clang 21 compiler and link against libc++.
 # Requires CMake >= 4.3 (see cmake_minimum_required in the top-level CMakeLists.txt).
 #
-# One file covers Apple Silicon and Intel: Homebrew's prefix is fixed per
-# architecture (/opt/homebrew on Apple Silicon, /usr/local on Intel), so the
-# correct LLVM 21 installation is selected by checking which one exists.
-# Detecting by existence rather than `uname -m` also does the right thing
-# under Rosetta 2, and stays cheap for CMake's repeated toolchain re-reads.
-# Intel is untested as of 1.0.0 (see cmake/PlatformDetection.cmake).
+# Apple Silicon only: Homebrew's prefix there is /opt/homebrew. Intel macOS
+# is not supported since NoisePQC++ 1.1.0 (see cmake/PlatformDetection.cmake).
+# The existence check stays cheap for CMake's repeated toolchain re-reads.
 
 # The experimental `import std` gate UUID and CMAKE_CXX_MODULE_STD are set in
 # the top-level CMakeLists.txt (before project()), not here.
 
 if(EXISTS "/opt/homebrew/opt/llvm@21")
     set(LLVM21_PREFIX "/opt/homebrew/opt/llvm@21")   # Apple Silicon Homebrew
-elseif(EXISTS "/usr/local/opt/llvm@21")
-    set(LLVM21_PREFIX "/usr/local/opt/llvm@21")      # Intel Homebrew (untested)
 else()
-    message(FATAL_ERROR "Homebrew LLVM 21 not found. Install it with: brew install llvm@21")
+    message(FATAL_ERROR "Homebrew LLVM 21 not found at /opt/homebrew/opt/llvm@21 (Apple Silicon). Install it with: brew install llvm@21")
 endif()
+
+# ISA baseline (project-wide), Apple Silicon. macOS builds are not used for
+# published wall-time benchmarks, so native tuning is acceptable.
+#
+# The value is a cache default: -DNOISE_BOTAN_ARCH_FLAGS=<flags> overrides it.
+# Like any CMake cache value, it then persists in that build dir until changed.
+set(NOISE_BOTAN_ARCH_FLAGS "-mcpu=native" CACHE STRING "ISA baseline flags (project-wide)")
 
 # Point to the root of the installation.
 # This helps CMake's `find_*` commands locate the correct packages automatically.
@@ -27,6 +29,10 @@ set(CMAKE_PREFIX_PATH "${LLVM21_PREFIX}" CACHE PATH "Prefix path for LLVM 21 too
 # Specify the Clang 21 compiler paths from the Homebrew LLVM 21 installation.
 set(CMAKE_C_COMPILER "${LLVM21_PREFIX}/bin/clang")
 set(CMAKE_CXX_COMPILER "${LLVM21_PREFIX}/bin/clang++")
+
+# LTO static archives hold LLVM bitcode, which needs LLVM's own archiver.
+set(CMAKE_AR "${LLVM21_PREFIX}/bin/llvm-ar" CACHE FILEPATH "")
+set(CMAKE_RANLIB "${LLVM21_PREFIX}/bin/llvm-ranlib" CACHE FILEPATH "")
 
 # Point CMake directly at libc++'s std-module manifest (CMake >= 4.2) instead
 # of injecting -resource-dir into compiler identification.

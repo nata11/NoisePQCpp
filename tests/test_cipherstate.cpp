@@ -19,11 +19,12 @@
 //
 
 //
-// CipherState Module Tests using Catch2 v3.11
+// CipherState Module Tests using Catch2 v3
 //
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_session.hpp>
+#include "botan_all.h"
 
 import noise;
 
@@ -292,31 +293,9 @@ TEST_CASE("CipherState - Rekey", "[cipherstate][rekey]") {
 
     auto old_key = state.key;
 
-    SECTION("Rekey with default hash algorithm") {
-        // Call Rekey without arguments to use default
+    SECTION("Rekey changes the key") {
+        // Noise spec Section 4.2 REKEY
         state.Rekey();
-
-        // New key should be different
-        REQUIRE(state.key != old_key);
-
-        // New key should not be all zeros
-        REQUIRE(state.HasKey());
-    }
-
-    SECTION("Rekey with explicit HKDF(SHA-256)") {
-        // Call Rekey with explicit default algorithm
-        state.Rekey("HKDF(SHA-256)");
-
-        // New key should be different
-        REQUIRE(state.key != old_key);
-
-        // New key should not be all zeros
-        REQUIRE(state.HasKey());
-    }
-
-    SECTION("Rekey with custom hash algorithm") {
-        // Test with a different hash algorithm
-        state.Rekey("HKDF(SHA-512)");
 
         // New key should be different
         REQUIRE(state.key != old_key);
@@ -345,17 +324,9 @@ TEST_CASE("CipherState - Rekey without key does nothing", "[cipherstate][rekey]"
 
     REQUIRE_FALSE(state.HasKey());
 
-    SECTION("Rekey without key using default algorithm") {
+    SECTION("Rekey without key") {
         // Rekey without key should return early
         state.Rekey();
-
-        // Should still have no key
-        REQUIRE_FALSE(state.HasKey());
-    }
-
-    SECTION("Rekey without key using explicit algorithm") {
-        // Rekey without key should return early
-        state.Rekey("HKDF(SHA-256)");
 
         // Should still have no key
         REQUIRE_FALSE(state.HasKey());
@@ -575,7 +546,7 @@ TEST_CASE("CipherState - 3-argument buffer overload through SymmetricState", "[c
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     std::vector<std::uint8_t> input_km(32, 0xBB);
     ss.MixKey(input_km);
@@ -601,7 +572,7 @@ TEST_CASE("CipherState - 3-argument buffer overload through SymmetricState", "[c
         Cipher cipher2(ChaChaPoly);
         Hash hash2(SHA256);
         SymmetricState ss2(cipher2, hash2);
-        ss2.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+        ss2.InitializeSymmetric(protocol_name);
         ss2.MixKey(input_km);
 
         std::vector<std::uint8_t> decrypted;
@@ -648,7 +619,7 @@ TEST_CASE("CipherState - 2-argument vs 3-argument overload consistency", "[ciphe
         Hash hash(SHA256);
         SymmetricState ss(cipher2, hash);
         std::string protocol_name = "Test";
-        ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+        ss.InitializeSymmetric(protocol_name);
         ss.cs.InitializeKey(key);
         ss.cs.SetNonce(0);
 
@@ -672,7 +643,7 @@ TEST_CASE("CipherState - 2-argument vs 3-argument overload consistency", "[ciphe
         Hash hash(SHA256);
         SymmetricState ss(cipher2, hash);
         std::string protocol_name = "Test";
-        ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+        ss.InitializeSymmetric(protocol_name);
         ss.cs.InitializeKey(key);
         ss.cs.SetNonce(0);
 
@@ -730,7 +701,7 @@ TEST_CASE("CipherState - 3-argument buffer overload appends correctly", "[cipher
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     std::vector<std::uint8_t> input_km(32, 0xDD);
     ss.MixKey(input_km);
@@ -804,7 +775,7 @@ TEST_CASE("CipherState - Both overloads respect nonce", "[cipherstate][overload]
         SymmetricState ss(cipher, hash);
 
         std::string protocol_name = "Test";
-        ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+        ss.InitializeSymmetric(protocol_name);
         ss.MixKey(std::vector<std::uint8_t>(32, 0xAA));
 
         REQUIRE(ss.cs.nonce == 0);
@@ -821,6 +792,230 @@ TEST_CASE("CipherState - Both overloads respect nonce", "[cipherstate][overload]
     }
 }
 
+// ============================================================================
+// Error-model, nonce-exhaustion and size-limit tests
+// ============================================================================
+
+TEST_CASE("CipherState - Tampered ciphertext throws DecryptionError", "[cipherstate][decrypt][error]") {
+    std::array<std::uint8_t, 32> key{};
+    std::ranges::fill(key, 0x5A);
+    const std::vector<std::uint8_t> plaintext = {0x48, 0x65, 0x6c, 0x6c, 0x6f};
+    const std::vector<std::uint8_t> ad = {0x01, 0x02};
+
+    auto run = [&](const std::string_view algo) {
+        CipherState tx(Cipher(algo), 65535);
+        CipherState rx(Cipher(algo), 65535);
+        tx.InitializeKey(key);
+        rx.InitializeKey(key);
+
+        const auto ciphertext = tx.EncryptWithAd(ad, plaintext);
+        auto tampered = ciphertext;
+        tampered[tampered.size() / 2] ^= 0x01;
+
+        REQUIRE(rx.nonce == 0);
+        REQUIRE_THROWS_AS(rx.DecryptWithAd(ad, tampered), DecryptionError);
+        REQUIRE(rx.nonce == 0);  // a failed decrypt does not consume the nonce
+
+        // The untampered ciphertext still decrypts at the same nonce
+        const auto decrypted = rx.DecryptWithAd(ad, ciphertext);
+        REQUIRE(decrypted == plaintext);
+        REQUIRE(rx.nonce == 1);
+    };
+
+    SECTION("ChaChaPoly") { run(ChaChaPoly); }
+    SECTION("AESGCM") { run(AESGCM); }
+}
+
+TEST_CASE("CipherState - Ciphertext shorter than the tag throws DecryptionError", "[cipherstate][decrypt][error]") {
+    Cipher cipher(ChaChaPoly);
+    CipherState state(std::move(cipher), 65535);
+
+    std::array<std::uint8_t, 32> key{};
+    std::ranges::fill(key, 0x3C);
+    state.InitializeKey(key);
+    REQUIRE(state.aeadOverhead == 16);
+
+    const std::vector<std::uint8_t> ad{};
+    for (const std::size_t len : {std::size_t{0}, std::size_t{1}, std::size_t{15}}) {
+        const std::vector<std::uint8_t> ciphertext(len, 0x7E);
+        REQUIRE_THROWS_AS(state.DecryptWithAd(ad, ciphertext), DecryptionError);
+        REQUIRE(state.nonce == 0);
+    }
+}
+
+TEST_CASE("CipherState - Nonce exhaustion", "[cipherstate][nonce][error]") {
+    Cipher cipher(ChaChaPoly);
+    CipherState state(std::move(cipher), 65535);
+
+    std::array<std::uint8_t, 32> key{};
+    std::ranges::fill(key, 0x11);
+    state.InitializeKey(key);
+
+    const std::vector<std::uint8_t> ad{};
+    const std::vector<std::uint8_t> plaintext = {0x01, 0x02, 0x03};
+
+    SECTION("EncryptWithAd at the reserved nonce throws and leaves the nonce unchanged") {
+        state.SetNonce(MAX_NONCE);
+        REQUIRE_THROWS_AS(state.EncryptWithAd(ad, plaintext), NonceExhaustedError);
+        REQUIRE(state.nonce == MAX_NONCE);
+    }
+
+    SECTION("DecryptWithAd at the reserved nonce throws and leaves the nonce unchanged") {
+        const std::vector<std::uint8_t> ciphertext(plaintext.size() + 16, 0x00);
+        state.SetNonce(MAX_NONCE);
+        REQUIRE_THROWS_AS(state.DecryptWithAd(ad, ciphertext), NonceExhaustedError);
+        REQUIRE(state.nonce == MAX_NONCE);
+    }
+
+    SECTION("The last usable nonce works once, then the state is exhausted") {
+        state.SetNonce(MAX_NONCE - 1);
+        const auto ciphertext = state.EncryptWithAd(ad, plaintext);
+        REQUIRE(ciphertext.size() == plaintext.size() + 16);
+        REQUIRE(state.nonce == MAX_NONCE);
+        REQUIRE_THROWS_AS(state.EncryptWithAd(ad, plaintext), NonceExhaustedError);
+        REQUIRE(state.nonce == MAX_NONCE);
+    }
+}
+
+TEST_CASE("CipherState - Transport message size limit", "[cipherstate][messagesize][error]") {
+    const std::vector<std::uint8_t> ad{};
+    std::array<std::uint8_t, 32> key{};
+    std::ranges::fill(key, 0x77);
+
+    SECTION("Keyed: plaintext plus tag is bounded by maxMessageSize") {
+        Cipher cipher(ChaChaPoly);
+        CipherState state(std::move(cipher), 65535);
+        state.InitializeKey(key);
+
+        const std::vector<std::uint8_t> fits(65519, 0xAB);  // 65519 + 16 = 65535
+        const auto ciphertext = state.EncryptWithAd(ad, fits);
+        REQUIRE(ciphertext.size() == 65535);
+        REQUIRE(state.nonce == 1);
+
+        const std::vector<std::uint8_t> tooBig(65520, 0xAB);  // 65520 + 16 = 65536
+        REQUIRE_THROWS_AS(state.EncryptWithAd(ad, tooBig), MessageSizeError);
+        REQUIRE(state.nonce == 1);
+    }
+
+    SECTION("Keyed: a ciphertext over maxMessageSize is rejected before decryption") {
+        Cipher cipher(ChaChaPoly);
+        CipherState state(std::move(cipher), 65535);
+        state.InitializeKey(key);
+
+        const std::vector<std::uint8_t> tooBig(65536, 0xCD);
+        REQUIRE_THROWS_AS(state.DecryptWithAd(ad, tooBig), MessageSizeError);
+        REQUIRE(state.nonce == 0);
+    }
+
+    SECTION("Unkeyed passthrough: exactly maxMessageSize passes, one more byte throws") {
+        Cipher cipher(ChaChaPoly);
+        CipherState state(std::move(cipher), 65535);
+        REQUIRE_FALSE(state.HasKey());
+
+        const std::vector<std::uint8_t> fits(65535, 0xEF);
+        REQUIRE(state.EncryptWithAd(ad, fits) == fits);
+        REQUIRE(state.DecryptWithAd(ad, fits) == fits);
+
+        const std::vector<std::uint8_t> tooBig(65536, 0xEF);
+        REQUIRE_THROWS_AS(state.EncryptWithAd(ad, tooBig), MessageSizeError);
+        REQUIRE_THROWS_AS(state.DecryptWithAd(ad, tooBig), MessageSizeError);
+    }
+}
+
+TEST_CASE("CipherState - destructor scrubs the key", "[cipherstate][wiping]") {
+    const Cipher cipher(ChaChaPoly);
+    std::array<std::uint8_t, SYMMETRIC_KEY_SIZE> keyBytes{};
+    for (std::size_t i = 0; i < keyBytes.size(); ++i) {
+        keyBytes[i] = static_cast<std::uint8_t>(0xA3 + 7 * i);
+    }
+    const auto needle = std::as_bytes(std::span{keyBytes});
+
+    // Caller-owned storage, so the bytes can be inspected after the object is destroyed.
+    // Constructing into given storage needs a pointer to it; there is no other form.
+    alignas(CipherState) std::array<std::byte, sizeof(CipherState)> storage{};
+    auto* const state = std::construct_at(reinterpret_cast<CipherState*>(storage.data()),
+                                          cipher, NOISE_MAX_MESSAGE_SIZE);
+    state->InitializeKey(keyBytes);
+
+    SECTION("Destroying a keyed CipherState leaves no key bytes in its storage") {
+        const bool keyPresentWhileAlive = !std::ranges::search(storage, needle).empty();
+        std::destroy_at(state);
+
+        REQUIRE(keyPresentWhileAlive);
+        REQUIRE(std::ranges::search(storage, needle).empty());
+    }
+
+    SECTION("A moved-from CipherState scrubs its copy of the key too") {
+        alignas(CipherState) std::array<std::byte, sizeof(CipherState)> storageB{};
+        auto* const moved = std::construct_at(reinterpret_cast<CipherState*>(storageB.data()),
+                                              std::move(*state));
+        const bool keyPresentInBoth = !std::ranges::search(storage, needle).empty() &&
+                                      !std::ranges::search(storageB, needle).empty();
+        std::destroy_at(moved);
+        std::destroy_at(state);
+
+        REQUIRE(keyPresentInBoth);
+        REQUIRE(std::ranges::search(storage, needle).empty());
+        REQUIRE(std::ranges::search(storageB, needle).empty());
+    }
+}
+
+// Guard: the AEAD key cache inside Cipher must be invisible through CipherState,
+// whose key is a public field.
+TEST_CASE("CipherState - copies and direct key writes still encrypt correctly", "[cipherstate][key][cache]") {
+    for (const auto name : {ChaChaPoly, AESGCM}) {
+        INFO("cipher " << name);
+        std::array<std::uint8_t, 32> k1{};
+        std::ranges::fill(k1, 0x44);
+        std::array<std::uint8_t, 32> k2{};
+        std::ranges::fill(k2, 0x55);
+        const std::vector<std::uint8_t> pt = {0x4e, 0x6f, 0x69, 0x73, 0x65};
+        const std::vector<std::uint8_t> ad = {0x01, 0x02, 0x03};
+
+        // A keyed state and its copy produce identical ciphertext for the same nonce
+        CipherState a(Cipher(name), 65535);
+        a.InitializeKey(k1);
+        const auto firstA = a.EncryptWithAd(ad, pt);   // nonce 0, so the copy below starts at 1
+        CipherState b(a);
+        CHECK(b.key == a.key);
+        CHECK(b.nonce == a.nonce);
+        const auto ca = a.EncryptWithAd(ad, pt);
+        const auto cb = b.EncryptWithAd(ad, pt);
+        CHECK(ca == cb);
+        CHECK(ca != firstA);
+
+        // Writing key directly to K2 (then SetNonce(0)) equals a fresh state initialized with K2
+        a.key = k2;
+        a.SetNonce(0);
+        CipherState fresh2(Cipher(name), 65535);
+        fresh2.InitializeKey(k2);
+        const auto ct2 = a.EncryptWithAd(ad, pt);
+        CHECK(ct2 == fresh2.EncryptWithAd(ad, pt));
+        // The copy, still on K1, decrypts K1 ciphertext; after a direct write it decrypts K2's
+        b.SetNonce(1);
+        CHECK(b.DecryptWithAd(ad, cb) == pt);
+        b.key = k2;
+        b.SetNonce(0);
+        CHECK(b.DecryptWithAd(ad, ct2) == pt);
+        // Back to K1 by direct write
+        a.key = k1;
+        a.SetNonce(0);
+        CHECK(a.EncryptWithAd(ad, pt) == firstA);
+
+        // After Rekey(), the output equals a fresh state initialized with the rekeyed key
+        a.Rekey();
+        CHECK(a.key != k1);
+        CipherState rekeyed(Cipher(name), 65535);
+        rekeyed.InitializeKey(a.key);
+        rekeyed.SetNonce(a.nonce);
+        const auto cr = a.EncryptWithAd(ad, pt);
+        CHECK(cr == rekeyed.EncryptWithAd(ad, pt));
+        // and a copy taken after the rekey agrees too
+        CipherState c(a);
+        CHECK(a.EncryptWithAd(ad, pt) == c.EncryptWithAd(ad, pt));
+    }
+}
+
 // Main function for Catch2
 int main(int argc, char* argv[]) {
     // Disable all logging during tests for clean output
@@ -828,3 +1023,46 @@ int main(int argc, char* argv[]) {
     return Catch::Session().run(argc, argv);
 }
 
+
+TEST_CASE("CipherState - Rekey is the Noise spec REKEY", "[cipherstate][rekey]") {
+    // Noise spec Section 4.2: REKEY(k) = ENCRYPT(k, 2^64-1, zerolen, zeros), truncated to
+    // the first 32 bytes. The expected value is computed with Botan directly, independently of
+    // Cipher and CipherState. The Noise nonce is 4 zero bytes followed by the 64-bit counter;
+    // 2^64-1 is all ones, so its byte order does not matter.
+    struct Case {
+        std::string_view noiseName;
+        std::string_view botanName;
+    };
+    for (const auto& [noiseName, botanName] : {Case{ChaChaPoly, "ChaCha20Poly1305"}, Case{AESGCM, "AES-256/GCM"}}) {
+        INFO(noiseName);
+
+        const auto rekey = [&](const std::span<const std::uint8_t> k) {
+            auto aead = Botan::AEAD_Mode::create_or_throw(std::string{botanName}, Botan::Cipher_Dir::Encryption);
+            aead->set_key(k);
+            constexpr std::array<std::uint8_t, 12> maxNonce{0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+            aead->start(maxNonce);
+            Botan::secure_vector<std::uint8_t> buffer(SYMMETRIC_KEY_SIZE, 0);   // 32 zero bytes
+            aead->finish(buffer);                                                // ciphertext || tag
+            std::array<std::uint8_t, SYMMETRIC_KEY_SIZE> out{};
+            std::ranges::copy_n(buffer.begin(), SYMMETRIC_KEY_SIZE, out.begin());
+            return out;
+        };
+
+        std::array<std::uint8_t, SYMMETRIC_KEY_SIZE> initialKey{};
+        std::ranges::fill(initialKey, 0xAA);
+        const auto expectedOnce = rekey(initialKey);
+        const auto expectedTwice = rekey(expectedOnce);
+
+        CipherState state{Cipher{noiseName}, 65535};
+        state.InitializeKey(initialKey);
+        state.SetNonce(7);
+
+        state.Rekey();
+        REQUIRE(state.key == expectedOnce);
+        REQUIRE(state.nonce == 7);   // REKEY leaves the nonce unchanged
+
+        state.Rekey();
+        CHECK(state.key == expectedTwice);   // REKEY(REKEY(k))
+        CHECK(state.nonce == 7);
+    }
+}

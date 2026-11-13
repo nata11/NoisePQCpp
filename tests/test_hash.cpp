@@ -19,7 +19,7 @@
 //
 
 //
-// Hash Module Tests using Catch2 v3.11
+// Hash Module Tests using Catch2 v3
 //
 
 #include <catch2/catch_test_macros.hpp>
@@ -432,6 +432,20 @@ TEST_CASE("Hash - Copy constructor creates independent instance", "[hash][indepe
 
     // Both should produce the same result
     REQUIRE(digest1 == digest2);
+}
+
+TEST_CASE("Hash - Only Noise hash names are accepted", "[hash][constructor][allowlist]") {
+    SECTION("Botan spellings and non-Noise hashes are rejected before any Botan call") {
+        REQUIRE_THROWS_AS(Hash{"SHA-256"}, ProtocolNotSupportedError);
+        REQUIRE_THROWS_AS(Hash{"MD5"}, ProtocolNotSupportedError);
+    }
+
+    SECTION("The four Noise names construct with the expected output lengths") {
+        REQUIRE(Hash{"SHA256"}.Size() == 32);
+        REQUIRE(Hash{"SHA512"}.Size() == 64);
+        REQUIRE(Hash{"BLAKE2b"}.Size() == 64);
+        REQUIRE(Hash{"BLAKE2s"}.Size() == 32);
+    }
 }
 
 // Main function for Catch2

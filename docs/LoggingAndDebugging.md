@@ -1,7 +1,7 @@
 # Logging and Debugging Guide
 
-**Version**: 1.0.0
-**Last Updated**: 2026-04-25
+**Version**: 1.1.0
+**Last Updated**: 2026-11-13
 
 This guide explains how to build and use the debug version of NoisePQC++ to observe detailed state transitions during Noise Protocol handshakes, including classical, post-quantum (PQ), and hybrid forward secrecy (HFS) patterns.
 
@@ -47,7 +47,7 @@ The debug system uses **color-coded, hierarchical logging** that clearly shows:
 
 NoisePQC++ supports two build modes controlled by the `NOISE_DEBUG_BUILD` CMake option:
 
-### Debug Build (`NOISE_DEBUG_BUILD=ON`)
+### Debug Build (`NOISE_DEBUG_BUILD=ON`, default)
 
 **Features**:
 - Uses debug-enabled module files: `CipherState.debug.cppm`, `SymmetricState.debug.cppm`, `HandshakeState.debug.cppm`
@@ -69,7 +69,7 @@ NoisePQC++ supports two build modes controlled by the `NOISE_DEBUG_BUILD` CMake 
 - Console I/O can slow down high-throughput applications
 - Recommended for development, **not** for production
 
-### Production Build (`NOISE_DEBUG_BUILD=OFF`, default)
+### Production Build (`NOISE_DEBUG_BUILD=OFF`)
 
 **Features**:
 - Uses optimized module files: `CipherState.cppm`, `SymmetricState.cppm`, `HandshakeState.cppm`
@@ -104,7 +104,7 @@ cmake -B build-debug -S . -G Ninja \
 cmake --build build-debug
 
 # Run an example with debug output
-cd build-debug/examples
+cd build-debug/bin/examples
 ./example_test
 ```
 
@@ -143,7 +143,7 @@ cmake -B build-debug -S . -G Ninja \
 cmake --build build-debug -j2
 ```
 
-#### macOS (Apple Silicon; Intel untested)
+#### macOS (Apple Silicon)
 
 ```bash
 cmake -B build-debug -S . -G Ninja \
@@ -155,12 +155,9 @@ cmake --build build-debug
 
 #### Windows (MSVC)
 
-```powershell
-# Open Developer Command Prompt for VS 2022
-
-cmake -B build-debug -S . -G Ninja `
-  -DNOISE_DEBUG_BUILD=ON
-
+```cmd
+:: In the x64 Native Tools Command Prompt for VS 2022
+cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug -DNOISE_DEBUG_BUILD=ON -S . -B build-debug
 cmake --build build-debug
 ```
 
@@ -273,12 +270,12 @@ Debug output is organized hierarchically with color-coding and clear role identi
 | Color | Operation Type | Example |
 |-------|---------------|---------|
 | **Green** (`[92m`) | High-level function entry | `WriteMessage: ENTER` |
-| **Bright Cyan** (`[38;5;81m`) | High-level function entry (responder) | `ReadMessage: ENTER` |
+| **Bright cyan-blue** (`[38;5;81m`) | ReadMessage entry/exit | `ReadMessage: ENTER` |
 | **Blue** | Read operations | `ReadMessage: Processing tokens` |
-| **Cyan** | State operations | `WriteMessage: Processing tokens` |
+| **Green** (`[32m`) | Write operations | `WriteMessage: Processing tokens` |
 | **Yellow** | Token processing | `Token e: Writing ephemeral key` |
 | **White** | Detailed information | Sizes, states, results |
-| **Gray** (`[97m`) | Pattern progression | `Pattern index incremented to 1` |
+| **Bright white** (`[97m`) | Pattern progression | `Pattern index incremented to 1` |
 
 ### Role Identification
 
@@ -390,10 +387,12 @@ int main() {
     HandshakeState bobHs(bobCfg);
 
     // Execute XX handshake
-    auto msg1 = aliceHs.WriteMessage({'h', 'e', 'l', 'l', 'o'});
+    std::vector<std::uint8_t> hello{'h', 'e', 'l', 'l', 'o'};
+    auto msg1 = aliceHs.WriteMessage(hello);
     auto payload1 = bobHs.ReadMessage(msg1);
 
-    auto msg2 = bobHs.WriteMessage({'w', 'o', 'r', 'l', 'd'});
+    std::vector<std::uint8_t> world{'w', 'o', 'r', 'l', 'd'};
+    auto msg2 = bobHs.WriteMessage(world);
     aliceHs.ReadMessage(msg2);
 
     auto msg3 = aliceHs.WriteMessage({});
@@ -579,13 +578,13 @@ Debug output uses ANSI color codes for better readability. Colors may vary by te
 - **Cyan** (`\033[36m`): `[CIPHER]`, `[SYMMETRIC]`
 
 **Operation Colors**:
-- **Green** (`\033[92m`): Entry/Exit markers
-- **Bright Cyan** (`\033[38;5;81m`): High-level operations (responder)
+- **Green** (`\033[92m`): WriteMessage entry/exit
+- **Bright cyan-blue** (`\033[38;5;81m`): ReadMessage entry/exit
 - **Blue** (`\033[34m`): Read operations
-- **Cyan** (`\033[32m`): Write operations
+- **Green** (`\033[32m`): Write operations
 - **Yellow** (`\033[33m`): Token processing
 - **White** (`\033[37m`): Detail messages
-- **Gray** (`\033[97m`): State changes
+- **Bright white** (`\033[97m`): State changes
 
 ### Terminal Compatibility
 
@@ -611,7 +610,7 @@ The debug logging colors are optimized for dark terminal backgrounds. When you n
 
 ### Prerequisites
 
-- A debug build with `pattern_zoo` compiled (see [Building in Debug Mode](#building-in-debug-mode))
+- A debug build with `pattern_zoo` compiled (see [Building in Debug Mode](#building-in-debug-mode)); the script runs `cmake-build-debug-clang-21/bin/Debug/examples/pattern_zoo`, or the Debug `pattern_zoo` (built with `NOISE_DEBUG_BUILD=ON`) that the `PATTERN_ZOO` environment variable points to
 - **aha** (Ansi HTML Adapter): `brew install aha`
 - **Google Chrome** (only required for `--png` output)
 - **ImageMagick** (optional, auto-trims PNG whitespace): `brew install imagemagick`
@@ -642,7 +641,7 @@ By default, the script outputs **both** HTML and Markdown. Use flags to select s
 ./scripts/capture_debug_output.sh --html --png XX
 ```
 
-The script accepts any of the 82 individual pattern names or 6 category keywords supported by `pattern_zoo`:
+The script accepts any of the 84 individual pattern names or 6 category keywords supported by `pattern_zoo`:
 
 ```bash
 # Category keywords (captures all patterns in the category)
@@ -706,11 +705,6 @@ Debug builds have performance characteristics you should be aware of:
 3. **String Formatting**: `std::format` has overhead for constructing log messages
 4. **Binary Size**: Debug modules are larger due to logging code
 
-**Measurements** (approximate):
-- Handshake latency increase: **5-15%** with logging **disabled** at runtime
-- Handshake latency increase: **200-500%** with logging **enabled**
-- Binary size increase: **20-40%**
-
 ### Recommendations
 
 **Development**:
@@ -757,7 +751,7 @@ auto finalMsg = hs.WriteMessage(finalPayload);
 1. **Verify debug build**:
    ```bash
    # Check CMake configuration output:
-   cmake -B build-debug -S . -DNOISE_DEBUG_BUILD=ON
+   cmake -B build-debug -S . -G Ninja -DCMAKE_TOOLCHAIN_FILE=<toolchain file> -DNOISE_DEBUG_BUILD=ON
    # Should see: "NoisePQC++: Debug build with logging ENABLED"
    ```
 
@@ -781,7 +775,7 @@ auto finalMsg = hs.WriteMessage(finalPayload);
 4. **Rebuild completely**:
    ```bash
    rm -rf build-debug
-   cmake -B build-debug -S . -G Ninja -DNOISE_DEBUG_BUILD=ON
+   cmake -B build-debug -S . -G Ninja -DCMAKE_TOOLCHAIN_FILE=<toolchain file> -DNOISE_DEBUG_BUILD=ON
    cmake --build build-debug
    ```
 
@@ -847,7 +841,7 @@ auto finalMsg = hs.WriteMessage(finalPayload);
 
 ```bash
 rm -rf build-debug
-cmake -B build-debug -S . -G Ninja -DNOISE_DEBUG_BUILD=ON
+cmake -B build-debug -S . -G Ninja -DCMAKE_TOOLCHAIN_FILE=<toolchain file> -DNOISE_DEBUG_BUILD=ON
 cmake --build build-debug
 ```
 
@@ -863,10 +857,10 @@ For quick terminal-based captures (without color remapping, see [Capturing Debug
 
 ```bash
 # Capture with colors (for viewing in terminal later)
-./bin/Debug/examples/example_test > debug_output.log 2>&1
+./build-debug/bin/examples/example_test > debug_output.log 2>&1
 
 # Capture without colors (for text processing)
-./bin/Debug/examples/example_test 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > debug_output_clean.txt
+./build-debug/bin/examples/example_test 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > debug_output_clean.txt
 ```
 
 ### Analyzing Handshake Patterns
@@ -875,7 +869,7 @@ Use debug output to verify pattern implementations:
 
 ```bash
 # Run pattern zoo with specific pattern
-./bin/Debug/examples/pattern_zoo XX > xx_debug.log 2>&1
+./build-debug/bin/examples/pattern_zoo XX > xx_debug.log 2>&1
 
 # Analyze token sequence
 grep "Token" xx_debug.log
@@ -894,10 +888,12 @@ EnableAllLogging();
 std::println("\n=== Demonstrating XX Handshake Pattern ===\n");
 
 std::println("Message 1: Initiator sends ephemeral key");
-auto msg1 = alice.WriteMessage({'h','e','l','l','o'});
+std::vector<std::uint8_t> hello{'h', 'e', 'l', 'l', 'o'};
+auto msg1 = alice.WriteMessage(hello);
 
 std::println("\nMessage 2: Responder sends ephemeral, establishes encryption");
-auto msg2 = bob.WriteMessage({'w','o','r','l','d'});
+std::vector<std::uint8_t> world{'w', 'o', 'r', 'l', 'd'};
+auto msg2 = bob.WriteMessage(world);
 
 std::println("\nMessage 3: Initiator completes handshake");
 auto msg3 = alice.WriteMessage({});
@@ -921,7 +917,7 @@ The NoisePQC++ debug logging system provides:
 
 **Key Takeaways**:
 - Use **debug builds** (`-DNOISE_DEBUG_BUILD=ON`) during development
-- Use **production builds** (`-DNOISE_DEBUG_BUILD=OFF`, default) for deployment
+- Use **production builds** (`-DNOISE_DEBUG_BUILD=OFF`) for deployment
 - Control logging at **runtime** with `Enable/DisableAllLogging()`
 - Debug output is **hierarchical** and **color-coded** for readability
 - Logging shows **token processing**, **DH operations**, **state transitions**, and **message flows**
@@ -935,6 +931,6 @@ The NoisePQC++ debug logging system provides:
 - [Pattern Guide](PatternGuide.md) - Noise pattern selection guide
 - [examples/README.md](../examples/README.md) - Example programs
 
-**Version**: NoisePQC++ v1.0.0
+**Version**: NoisePQC++ v1.1.0
 **Botan**: 3.13.0
-**Catch2**: v3.11.0
+**Catch2**: v3.16.1

@@ -73,7 +73,7 @@ export namespace Noise
     /// @name Protocol Constants
     /// @{
     constexpr auto MAX_NONCE = std::numeric_limits<std::uint64_t>::max();  ///< Maximum nonce value (Noise spec Section 5.1).
-    constexpr std::uint8_t SYMMETRIC_KEY_SIZE = 32;          ///< Symmetric key size in bytes (Noise spec Section 3).
+    constexpr std::uint8_t SYMMETRIC_KEY_SIZE = 32;          ///< Symmetric key size in bytes (Noise spec Section 4.2).
     constexpr std::uint16_t NOISE_MAX_MESSAGE_SIZE = 65535;  ///< Maximum message size in bytes (Noise spec Section 3).
     constexpr std::uint8_t MLKEM_SHARED_SECRET_SIZE = 32;    ///< ML-KEM shared secret size (FIPS 203).
     /// @}
@@ -124,6 +124,12 @@ export namespace Noise
 
 
 
+    // GCC -Wshadow: the enumerators repeat the namespace-scope name constants above (both are
+    // public API); scoped enumerators are reachable only qualified, so nothing is shadowed in use.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wshadow"
+#endif
     /** Supported hash algorithms (Noise spec Section 4.3). */
     enum class HashAlgo {
         SHA256,
@@ -131,6 +137,9 @@ export namespace Noise
         BLAKE2b,
         BLAKE2s
     };
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
     constexpr std::array<std::pair<HashAlgo, std::string_view>, 4> HashAlgos{
         {
@@ -150,11 +159,31 @@ export namespace Noise
         return "";
     }
 
+    /**
+     * Resolves a Noise hash name ("SHA256", "SHA512", "BLAKE2b", "BLAKE2s") to its enum.
+     * Exact, case-sensitive match against HashAlgos; any other string is std::nullopt.
+     */
+    constexpr std::optional<HashAlgo> ParseHashAlgo(const std::string_view name) {
+        for (const auto& [key, value] : HashAlgos) {
+            if (value == name) {
+                return key;
+            }
+        }
+        return std::nullopt;
+    }
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wshadow"
+#endif
     /** Supported AEAD cipher algorithms (Noise spec Section 4.2). */
     enum class CipherAlgo {
         AESGCM,
         ChaChaPoly
     };
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
     constexpr std::array<std::pair<CipherAlgo, std::string_view>, 2> CipherAlgos{
         {
@@ -172,6 +201,23 @@ export namespace Noise
         return "";
     }
 
+    /**
+     * Resolves a Noise cipher name ("ChaChaPoly", "AESGCM") to its enum.
+     * Exact, case-sensitive match against CipherAlgos; any other string is std::nullopt.
+     */
+    constexpr std::optional<CipherAlgo> ParseCipherAlgo(const std::string_view name) {
+        for (const auto& [key, value] : CipherAlgos) {
+            if (value == name) {
+                return key;
+            }
+        }
+        return std::nullopt;
+    }
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wshadow"
+#endif
     /** Supported key exchange algorithms: DH (X25519, X448) and KEM (ML-KEM variants). */
     enum class KeyAlgo {
         X25519,
@@ -180,6 +226,9 @@ export namespace Noise
         M768,
         M1024,
     };
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
     constexpr std::array<std::pair<KeyAlgo, std::string_view>, 5> KeyAlgos{
         {
@@ -198,5 +247,16 @@ export namespace Noise
             }
         }
         return "";
+    }
+
+    /** Resolves a Noise DH/KEM name ("25519", "448", "M512", "M768", "M1024"; exact,
+     *  case-sensitive) through KeyAlgos, like ParseCipherAlgo and ParseHashAlgo. */
+    constexpr std::optional<KeyAlgo> ParseKeyAlgo(const std::string_view name) {
+        for (const auto& [key, value] : KeyAlgos) {
+            if (value == name) {
+                return key;
+            }
+        }
+        return std::nullopt;
     }
 }

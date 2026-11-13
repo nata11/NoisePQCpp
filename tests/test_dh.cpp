@@ -19,11 +19,12 @@
 //
 
 //
-// Dh Module Tests using Catch2 v3.11
+// Dh Module Tests using Catch2 v3
 //
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_session.hpp>
+#include <catch2/matchers/catch_matchers.hpp>   // REQUIRE_THROWS_WITH
 
 import noise;
 
@@ -377,7 +378,7 @@ TEST_CASE("Dh - Edge case with zero-filled keys", "[dh][edge-case]") {
 }
 
 // ============================================================================
-// Phase 1: ML-KEM Key Generation Tests
+// ML-KEM Key Generation Tests
 // ============================================================================
 
 TEST_CASE("Dh - ML-KEM-512 Constructor", "[dh][mlkem][constructor][m512]") {
@@ -525,7 +526,7 @@ TEST_CASE("Dh - ML-KEM variants have different public key sizes", "[dh][mlkem][c
 }
 
 // ============================================================================
-// Phase 2: ML-KEM Encapsulation/Decapsulation Tests
+// ML-KEM Encapsulation/Decapsulation Tests
 // ============================================================================
 
 TEST_CASE("Dh - ML-KEM-512 Encapsulate/Decapsulate Round Trip", "[dh][mlkem][kem][m512]") {
@@ -652,6 +653,396 @@ TEST_CASE("Dh - ML-KEM KEM operation with wrong private key fails gracefully", "
 
     // The decapsulation will succeed but produce a different (invalid) shared secret
     REQUIRE(shared_secret_enc != shared_secret_wrong);
+}
+
+// ============================================================================
+// The Botan error boundary and public-key validation
+// ============================================================================
+
+namespace {
+    // Sets coefficient 0 of an ML-KEM encapsulation key (ByteEncode12, FIPS 203 Algorithm 5)
+    // to 0xFFF = 4095 >= q = 3329, which the FIPS 203 Section 7.2 modulus check must reject.
+    std::vector<std::uint8_t> WithCoefficient0OutOfRange(std::vector<std::uint8_t> key) {
+        key[0] = 0xFF;
+        key[1] |= 0x0F;
+        return key;
+    }
+
+    // "" if fn() throws a NoiseError; otherwise the dynamic type name of what it threw
+    // (a Botan type reads N5Botan...E on the Itanium ABI), or "nothing thrown".
+    template <typename F>
+    std::string NonNoiseThrow(F&& fn) {
+        try {
+            std::forward<F>(fn)();
+            return "nothing thrown";
+        }
+        catch (const NoiseError&) {
+            return "";
+        }
+        catch (const std::exception& e) {
+            return typeid(e).name();
+        }
+    }
+}
+
+TEST_CASE("Dh - Botan failures map to library error types", "[dh][error][boundary]") {
+    SECTION("DH with the all-zero (low-order) public key throws InvalidPublicKeyError") {
+        Dh dh(KeyAlgo::X25519);
+        auto kp = dh.GenerateKeypair();
+        const std::vector<std::uint8_t> zeros(dh.PublicKeySize(), 0x00);
+
+        REQUIRE(NonNoiseThrow([&] { (void)dh.DH(kp.private_key, zeros); }) == "");
+        REQUIRE_THROWS_AS(dh.DH(kp.private_key, zeros), InvalidPublicKeyError);
+    }
+
+    SECTION("DH with 31-byte keys throws NoiseError, not InvalidPublicKeyError") {
+        Dh dh(KeyAlgo::X25519);
+        const std::vector<std::uint8_t> shortKey(31, 0x42);
+
+        REQUIRE(NonNoiseThrow([&] { (void)dh.DH(shortKey, shortKey); }) == "");
+        REQUIRE_THROWS_AS(dh.DH(shortKey, shortKey), NoiseError);
+        try {
+            (void)dh.DH(shortKey, shortKey);
+            FAIL("no exception");
+        }
+        catch (const InvalidPublicKeyError&) {
+            FAIL("a private-key length error must not report an invalid public key");
+        }
+        catch (const NoiseError&) {
+            SUCCEED();
+        }
+    }
+
+    SECTION("Encapsulate to a tampered ML-KEM key throws InvalidPublicKeyError") {
+        Dh kem(M768);
+        auto kp = kem.GenerateKeypair();
+        const auto tampered = WithCoefficient0OutOfRange(kp.public_key);
+
+        REQUIRE(NonNoiseThrow([&] { (void)kem.Encapsulate(tampered); }) == "");
+        REQUIRE_THROWS_AS(kem.Encapsulate(tampered), InvalidPublicKeyError);
+    }
+
+    SECTION("Decapsulate with a truncated private key throws NoiseError") {
+        Dh kem(M768);
+        auto kp = kem.GenerateKeypair();
+        auto [ct, ss] = kem.Encapsulate(kp.public_key);
+        const std::vector<std::uint8_t> truncated(kp.private_key.begin(), kp.private_key.end() - 1);
+
+        REQUIRE(NonNoiseThrow([&] { (void)kem.Decapsulate(truncated, ct); }) == "");
+        REQUIRE_THROWS_AS(kem.Decapsulate(truncated, ct), NoiseError);
+    }
+}
+
+TEST_CASE("Dh - ValidatePublicKey", "[dh][validate]") {
+    SECTION("ML-KEM: a generated key passes; a tampered key and a wrong length throw") {
+        for (const std::string_view algo : {M512, M768, M1024}) {
+            INFO("algorithm " << algo);
+            Dh kem(algo);
+            auto kp = kem.GenerateKeypair();
+
+            REQUIRE_NOTHROW(kem.ValidatePublicKey(kp.public_key));
+            REQUIRE_THROWS_AS(kem.ValidatePublicKey(WithCoefficient0OutOfRange(kp.public_key)),
+                              InvalidPublicKeyError);
+
+            const std::vector<std::uint8_t> shortKey(kp.public_key.begin(), kp.public_key.end() - 1);
+            REQUIRE_THROWS_AS(kem.ValidatePublicKey(shortKey), InvalidPublicKeyError);
+
+            auto longKey = kp.public_key;
+            longKey.push_back(0x00);
+            REQUIRE_THROWS_AS(kem.ValidatePublicKey(longKey), InvalidPublicKeyError);
+        }
+    }
+
+    SECTION("DH: the right length passes; a wrong length throws") {
+        for (const std::string_view algo : {X25519, X448}) {
+            INFO("algorithm " << algo);
+            Dh dh(algo);
+            auto kp = dh.GenerateKeypair();
+
+            REQUIRE_NOTHROW(dh.ValidatePublicKey(kp.public_key));
+
+            // Length only: the low-order check stays at the DH token (Noise spec Section 4.1)
+            const std::vector<std::uint8_t> zeros(dh.PublicKeySize(), 0x00);
+            REQUIRE_NOTHROW(dh.ValidatePublicKey(zeros));
+
+            const std::vector<std::uint8_t> shortKey(dh.PublicKeySize() - 1, 0x42);
+            REQUIRE_THROWS_AS(dh.ValidatePublicKey(shortKey), InvalidPublicKeyError);
+        }
+    }
+}
+
+// The loaded DH key handle (DhPrivateKey).
+static_assert(!std::is_default_constructible_v<DhPrivateKey>, "a handle comes only from Dh");
+static_assert(!std::is_copy_constructible_v<DhPrivateKey>, "move-only");
+static_assert(!std::is_copy_assignable_v<DhPrivateKey>, "move-only");
+static_assert(std::is_nothrow_move_constructible_v<DhPrivateKey>, "noexcept move");
+static_assert(std::is_nothrow_move_assignable_v<DhPrivateKey>, "noexcept move");
+
+TEST_CASE("Dh - DhPrivateKey agrees with the raw-scalar DH", "[dh][handle]") {
+    for (const auto algo : {KeyAlgo::X25519, KeyAlgo::X448}) {
+        const Dh dh(algo);
+        INFO("algorithm " << dh.String());
+
+        const auto a = dh.GenerateKeypair();
+        const auto b = dh.GenerateKeypair();
+        const auto raw = dh.DH(a.private_key, b.public_key);
+        REQUIRE(raw.size() == dh.Size());
+        CHECK(raw == dh.DH(b.private_key, a.public_key));
+
+        // A handle loaded from the raw scalar agrees with the raw-scalar overload.
+        const DhPrivateKey ha = dh.LoadPrivateKey(a.private_key);
+        CHECK(dh.DH(ha, b.public_key) == raw);
+        // A handle can be used more than once (one loaded key object for a whole handshake).
+        CHECK(dh.DH(ha, b.public_key) == raw);
+        CHECK(dh.DH(ha, b.public_key) == raw);
+
+        // A keypair generated together with its handle: the raw private key, loaded or used
+        // raw, gives the same shared secret as the handle, and the public key matches it.
+        auto [c, hc] = dh.GenerateKeypairWithKey();
+        CHECK(c.private_key.size() == dh.Size());
+        CHECK(c.public_key.size() == dh.PublicKeySize());
+        const auto viaHandle = dh.DH(hc, b.public_key);
+        CHECK(viaHandle.size() == dh.Size());
+        CHECK(viaHandle == dh.DH(c.private_key, b.public_key));
+        CHECK(viaHandle == dh.DH(dh.LoadPrivateKey(c.private_key), b.public_key));
+        CHECK(viaHandle == dh.DH(b.private_key, c.public_key));
+        CHECK(viaHandle != raw);
+
+        // Move-only: the moved-to handle works, the moved-from one is gone.
+        const DhPrivateKey moved = std::move(hc);
+        CHECK(dh.DH(moved, b.public_key) == viaHandle);
+    }
+}
+
+TEST_CASE("Dh - DhPrivateKey rejects what DH rejects", "[dh][handle][error]") {
+    SECTION("the low-order (all-zero) peer key throws InvalidPublicKeyError, and the handle stays usable") {
+        for (const auto algo : {KeyAlgo::X25519, KeyAlgo::X448}) {
+            const Dh dh(algo);
+            INFO("algorithm " << dh.String());
+            const auto kp = dh.GenerateKeypair();
+            const auto peer = dh.GenerateKeypair();
+            const DhPrivateKey h = dh.LoadPrivateKey(kp.private_key);
+            const std::vector<std::uint8_t> zeros(dh.PublicKeySize(), 0x00);
+
+            CHECK(NonNoiseThrow([&] { (void)dh.DH(h, zeros); }) == "");
+            CHECK_THROWS_AS(dh.DH(h, zeros), InvalidPublicKeyError);
+            CHECK(dh.DH(h, peer.public_key) == dh.DH(kp.private_key, peer.public_key));
+        }
+    }
+
+    SECTION("a peer key of the wrong length throws InvalidPublicKeyError") {
+        const Dh dh(KeyAlgo::X25519);
+        const auto kp = dh.GenerateKeypair();
+        const DhPrivateKey h = dh.LoadPrivateKey(kp.private_key);
+        const std::vector<std::uint8_t> shortKey(31, 0x42);
+        const std::vector<std::uint8_t> longKey(33, 0x42);
+
+        CHECK(NonNoiseThrow([&] { (void)dh.DH(h, shortKey); }) == "");
+        CHECK_THROWS_AS(dh.DH(h, shortKey), InvalidPublicKeyError);
+        CHECK_THROWS_AS(dh.DH(h, longKey), InvalidPublicKeyError);
+    }
+
+    SECTION("a raw private key of the wrong length throws NoiseError, not InvalidPublicKeyError") {
+        const Dh dh(KeyAlgo::X25519);
+        const std::vector<std::uint8_t> shortKey(31, 0x42);
+
+        CHECK(NonNoiseThrow([&] { (void)dh.LoadPrivateKey(shortKey); }) == "");
+        CHECK_THROWS_AS(dh.LoadPrivateKey(shortKey), NoiseError);
+        try {
+            (void)dh.LoadPrivateKey(shortKey);
+            FAIL("no exception");
+        }
+        catch (const InvalidPublicKeyError&) {
+            FAIL("a private-key length error must not report an invalid public key");
+        }
+        catch (const NoiseError&) {
+            SUCCEED();
+        }
+    }
+
+    SECTION("a handle from another algorithm throws NoiseError, not InvalidPublicKeyError") {
+        const Dh x25519(KeyAlgo::X25519);
+        const Dh x448(KeyAlgo::X448);
+        const auto kp448 = x448.GenerateKeypair();
+        const auto peer25519 = x25519.GenerateKeypair();
+        const DhPrivateKey h448 = x448.LoadPrivateKey(kp448.private_key);
+
+        CHECK(NonNoiseThrow([&] { (void)x25519.DH(h448, peer25519.public_key); }) == "");
+        CHECK_THROWS_AS(x25519.DH(h448, peer25519.public_key), NoiseError);
+        try {
+            (void)x25519.DH(h448, peer25519.public_key);
+            FAIL("no exception");
+        }
+        catch (const InvalidPublicKeyError&) {
+            FAIL("an algorithm mismatch must not report an invalid public key");
+        }
+        catch (const NoiseError&) {
+            SUCCEED();
+        }
+        // The handle itself is fine with its own algorithm.
+        const auto peer448 = x448.GenerateKeypair();
+        CHECK(x448.DH(h448, peer448.public_key) == x448.DH(kp448.private_key, peer448.public_key));
+    }
+
+    SECTION("LoadPrivateKey and GenerateKeypairWithKey on a KEM throw NoiseError") {
+        const Dh kem(M768);
+        const auto kp = kem.GenerateKeypair();
+
+        CHECK(NonNoiseThrow([&] { (void)kem.LoadPrivateKey(kp.private_key); }) == "");
+        CHECK_THROWS_AS(kem.LoadPrivateKey(kp.private_key), NoiseError);
+        CHECK(NonNoiseThrow([&] { (void)kem.GenerateKeypairWithKey(); }) == "");
+        CHECK_THROWS_AS(kem.GenerateKeypairWithKey(), NoiseError);
+    }
+}
+
+// Guard: GenerateKeypair builds the Botan key object directly instead of going through
+// create_private_key by name. The raw encodings must be unchanged.
+TEST_CASE("Dh - GenerateKeypair sizes and agreement unchanged", "[dh][keygen][guard]") {
+    struct Expect { KeyAlgo algo; std::size_t priv; std::size_t pub; };
+    constexpr std::array<Expect, 5> expected{{
+        {KeyAlgo::X25519, 32, 32},
+        {KeyAlgo::X448, 56, 56},
+        {KeyAlgo::M512, 64, 800},     // ML-KEM private key in seed format (d || z), FIPS 203
+        {KeyAlgo::M768, 64, 1184},
+        {KeyAlgo::M1024, 64, 1568},
+    }};
+    for (const auto& e : expected) {
+        const Dh dh(e.algo);
+        INFO("algorithm " << dh.String());
+        const auto a = dh.GenerateKeypair();
+        const auto b = dh.GenerateKeypair();
+        CHECK(a.private_key.size() == e.priv);
+        CHECK(a.public_key.size() == e.pub);
+        CHECK(a.public_key.size() == dh.PublicKeySize());
+        CHECK(a.private_key != b.private_key);
+        if (dh.IsKEM()) {
+            // The generated keys round-trip through Encapsulate/Decapsulate
+            const auto [ct, ss] = dh.Encapsulate(a.public_key);
+            CHECK(ct.size() == dh.CiphertextSize());
+            CHECK(ss.size() == 32);
+            CHECK(dh.Decapsulate(a.private_key, ct) == ss);
+        }
+        else {
+            // Two generated keypairs agree
+            CHECK(dh.DH(a.private_key, b.public_key) == dh.DH(b.private_key, a.public_key));
+        }
+    }
+}
+
+// The loaded ML-KEM public key (KemPublicKey).
+static_assert(!std::is_default_constructible_v<KemPublicKey>, "a handle comes only from Dh");
+static_assert(!std::is_copy_constructible_v<KemPublicKey>, "move-only");
+static_assert(!std::is_copy_assignable_v<KemPublicKey>, "move-only");
+static_assert(std::is_nothrow_move_constructible_v<KemPublicKey>, "noexcept move");
+static_assert(std::is_nothrow_move_assignable_v<KemPublicKey>, "noexcept move");
+
+TEST_CASE("Dh - KemPublicKey loads once and encapsulates like the raw key", "[dh][kem][handle]") {
+    SECTION("one decode, many encapsulations; the raw overload still round-trips; LoadPublicKey checks what ValidatePublicKey checks") {
+        for (const std::string_view algo : {M512, M768, M1024}) {
+            INFO("algorithm " << algo);
+            const Dh kem(algo);
+            const auto kp = kem.GenerateKeypair();
+
+            // A handle carries its algorithm and is used for more than one encapsulation.
+            KemPublicKey handle = kem.LoadPublicKey(kp.public_key);
+            CHECK(Dh(handle.Algorithm()).String() == algo);
+            const auto [ct1, ss1] = kem.Encapsulate(handle);
+            const auto [ct2, ss2] = kem.Encapsulate(handle);
+            REQUIRE(ct1.size() == kem.CiphertextSize());
+            REQUIRE(ct2.size() == kem.CiphertextSize());
+            CHECK(ss1.size() == 32);
+            CHECK(ss2.size() == 32);
+            CHECK(kem.Decapsulate(kp.private_key, ct1) == ss1);
+            CHECK(kem.Decapsulate(kp.private_key, ct2) == ss2);
+            CHECK(ct1 != ct2);
+            CHECK(ss1 != ss2);
+
+            // The raw overload (LoadPublicKey, then Encapsulate(handle)) works too.
+            const auto [ct3, ss3] = kem.Encapsulate(kp.public_key);
+            CHECK(ct3.size() == kem.CiphertextSize());
+            CHECK(kem.Decapsulate(kp.private_key, ct3) == ss3);
+
+            // Exactly ValidatePublicKey's checks: the length, then the FIPS 203 Section 7.2 decode.
+            const std::vector<std::uint8_t> shortKey(kp.public_key.begin(), kp.public_key.end() - 1);
+            auto longKey = kp.public_key;
+            longKey.push_back(0x00);
+            CHECK(NonNoiseThrow([&] { (void)kem.LoadPublicKey(shortKey); }) == "");
+            CHECK_THROWS_AS(kem.LoadPublicKey(shortKey), InvalidPublicKeyError);
+            CHECK_THROWS_AS(kem.LoadPublicKey(longKey), InvalidPublicKeyError);
+            CHECK(NonNoiseThrow([&] { (void)kem.LoadPublicKey(WithCoefficient0OutOfRange(kp.public_key)); }) == "");
+            CHECK_THROWS_AS(kem.LoadPublicKey(WithCoefficient0OutOfRange(kp.public_key)), InvalidPublicKeyError);
+
+            // Move-only: the moved-to handle works.
+            const KemPublicKey moved = std::move(handle);
+            const auto [ct4, ss4] = kem.Encapsulate(moved);
+            CHECK(kem.Decapsulate(kp.private_key, ct4) == ss4);
+        }
+    }
+
+    SECTION("LoadPublicKey on a DH algorithm throws NoiseError, not InvalidPublicKeyError") {
+        const Dh dh(X25519);
+        const auto kp = dh.GenerateKeypair();
+
+        CHECK(NonNoiseThrow([&] { (void)dh.LoadPublicKey(kp.public_key); }) == "");
+        CHECK_THROWS_AS(dh.LoadPublicKey(kp.public_key), NoiseError);
+        try {
+            (void)dh.LoadPublicKey(kp.public_key);
+            FAIL("no exception");
+        }
+        catch (const InvalidPublicKeyError&) {
+            FAIL("a DH algorithm has no KEM public key to load; that must not report an invalid public key");
+        }
+        catch (const NoiseError&) {
+            SUCCEED();
+        }
+    }
+
+    SECTION("a handle from another KEM level throws NoiseError, not InvalidPublicKeyError, and stays usable") {
+        const Dh kem512(M512);
+        const Dh kem768(M768);
+        const auto kp768 = kem768.GenerateKeypair();
+        const KemPublicKey h768 = kem768.LoadPublicKey(kp768.public_key);
+
+        CHECK(NonNoiseThrow([&] { (void)kem512.Encapsulate(h768); }) == "");
+        CHECK_THROWS_AS(kem512.Encapsulate(h768), NoiseError);
+        try {
+            (void)kem512.Encapsulate(h768);
+            FAIL("no exception");
+        }
+        catch (const InvalidPublicKeyError&) {
+            FAIL("an algorithm mismatch must not report an invalid public key");
+        }
+        catch (const NoiseError&) {
+            SUCCEED();
+        }
+        // The handle itself is fine with its own Dh.
+        const auto [ct, ss] = kem768.Encapsulate(h768);
+        CHECK(kem768.Decapsulate(kp768.private_key, ct) == ss);
+    }
+}
+
+// The raw Encapsulate(span) keeps its own KEM check and its own error message in front of
+// the LoadPublicKey delegation, as the raw DH(span, span) does.
+TEST_CASE("Dh - Encapsulate(span) on a DH algorithm keeps its error message", "[dh][kem][errors]") {
+    for (const std::string_view algo : {X25519, X448}) {
+        INFO("algorithm " << algo);
+        const Dh dh(algo);
+        const auto kp = dh.GenerateKeypair();   // a public key of the right length for the algorithm
+
+        REQUIRE_THROWS_AS(dh.Encapsulate(kp.public_key), NoiseError);
+        REQUIRE_THROWS_WITH(dh.Encapsulate(kp.public_key),
+                            "Encapsulate() only supported for KEM algorithms (M512, M768, M1024)");
+        try {
+            (void)dh.Encapsulate(kp.public_key);
+            FAIL("no exception");
+        }
+        catch (const InvalidPublicKeyError&) {
+            FAIL("a DH algorithm has no KEM to encapsulate with; that must not report an invalid public key");
+        }
+        catch (const NoiseError&) {
+            SUCCEED();
+        }
+    }
 }
 
 // Main function for Catch2

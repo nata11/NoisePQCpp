@@ -19,10 +19,10 @@
 //
 
 //
-// HFS (Hybrid Forward Secrecy) Pattern Tests using Catch2 v3.11
+// HFS (Hybrid Forward Secrecy) Pattern Tests using Catch2 v3
 //
 // Tests for the "hfs" pattern modifier which adds KEM-based hybrid forward secrecy
-// to standard Noise handshakes per noise-kem-hfs.pdf specification.
+// to standard Noise handshakes per the Noise Protocol HFS spec extension.
 //
 
 #include <catch2/catch_test_macros.hpp>
@@ -169,21 +169,17 @@ TEST_CASE("HFS - ApplyHFSModifier transformation", "[hfs][pattern][transform]") 
 
     SECTION("IK -> IKhfs transformation") {
         // IK:      <- s            IKhfs:    <- s
-        //          -> e, es, s, ss           -> e, es, e1, s, ss (e1 after last DH)
+        //          -> e, es, s, ss           -> e, es, s, ss, e1 (e1 after the last DH)
         //          <- e, ee, se              <- e, ee, ekem1, se
         auto hfs = ApplyHFSModifier(IK);
 
         REQUIRE(hfs.String() == "IKhfs");
 
-        // First message: e, es, e1, s, ss (e1 after es which is the last DH before s)
-        // Actually per spec: e1 after "last DH operation in this message"
-        // es and ss are both DH ops, so e1 should be after ss
+        // First message: e, es, s, ss, e1 (e1 after ss, the last DH in the message)
         auto& msg0 = hfs.messages[0].tokens;
         REQUIRE(msg0.size() == 5);
         REQUIRE(msg0[0] == Token_e);
         REQUIRE(msg0[1] == Token_es);
-        // e1 could be after es or after ss depending on interpretation
-        // Let's check what we have
         bool has_e1 = std::find(msg0.begin(), msg0.end(), Token_e1) != msg0.end();
         REQUIRE(has_e1);
 
@@ -1072,6 +1068,36 @@ TEST_CASE("HFS - Message sizes are larger than non-HFS", "[hfs][message][size]")
         auto sizeDiff = hfsMsg.size() - normalMsg.size();
         REQUIRE(sizeDiff >= 1184);  // M768 public key size
     }
+}
+
+// ================================
+// Early ML-KEM key validation for e1
+// ================================
+
+TEST_CASE("XXhfs - Out-of-range e1 key rejected by ReadMessage", "[hfs][error][invalidkey][m768]") {
+    Protocol protocol("Noise_XXhfs_25519+M768_ChaChaPoly_SHA256");
+    REQUIRE(protocol.IsHFS());
+
+    auto aliceStatic = protocol.dh.GenerateKeypair();
+    auto bobStatic = protocol.dh.GenerateKeypair();
+
+    HandshakeConfig aliceCfg{.protocol = protocol, .isInitiator = true, .localStatic = aliceStatic};
+    HandshakeConfig bobCfg{.protocol = protocol, .isInitiator = false, .localStatic = bobStatic};
+    HandshakeState aliceHs(aliceCfg);
+    HandshakeState bobHs(bobCfg);
+
+    // -> e, e1 : e is the 32-byte X25519 point; e1 (ML-KEM-768, 1184 bytes) follows in the
+    // clear at offset 32. Set its coefficient 0 to 0xFFF = 4095 >= q = 3329 (FIPS 203 7.2).
+    auto bad = aliceHs.WriteMessage({});
+    const std::size_t e1Offset = protocol.dh.PublicKeySize();
+    REQUIRE(e1Offset == 32);
+    REQUIRE(bad.size() >= e1Offset + protocol.kem->PublicKeySize());
+    bad[e1Offset] = 0xFF;
+    bad[e1Offset + 1] |= 0x0F;
+
+    REQUIRE_THROWS_AS(bobHs.ReadMessage(bad), InvalidPublicKeyError);
+    REQUIRE(bobHs.GetStatus().HasError());
+    REQUIRE_FALSE(bobHs.GetStatus().IsComplete());
 }
 
 // ================================

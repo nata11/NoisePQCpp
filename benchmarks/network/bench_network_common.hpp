@@ -141,7 +141,7 @@ struct HandshakeTiming {
 };
 
 // ============================================================================
-// Message Framing (reused from asio_common.hpp)
+// Message Framing (same format as examples/asio-networking/asio_common.hpp)
 // ============================================================================
 
 inline void send_framed(tcp::socket& socket, std::span<const std::uint8_t> data) {

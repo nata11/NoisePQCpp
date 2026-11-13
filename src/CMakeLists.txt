@@ -35,3 +35,6 @@ target_link_libraries(noisepqc PUBLIC botan_static)
 
 # Export as NoisePQC::noisepqc for clean consumption
 add_library(NoisePQC::noisepqc ALIAS noisepqc)
+
+# Link-time optimization in Release configs (cmake/BuildConfig.cmake)
+noisepqc_optimize_target(noisepqc)

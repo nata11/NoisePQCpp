@@ -3,7 +3,7 @@
 # ================================
 
 # Note: Catch2 is provided by third_party/CMakeLists.txt via FetchContent
-# It is built with the project's toolchain (Clang 18 + libc++) to ensure ABI compatibility
+# It is built with the project's toolchain (Clang 21 with libc++, GCC 15 with libstdc++, or MSVC) to ensure ABI compatibility
 
 # Output tests to bin/tests/ (single-config) or bin/<Config>/tests/ (multi-config)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${NOISEPQC_BIN_DIR}/tests")
@@ -61,8 +61,14 @@ add_executable(test_vectors test_vectors.cpp)
 target_include_directories(test_vectors PRIVATE ${CMAKE_SOURCE_DIR}/third_party/nlohmann)
 target_link_libraries(test_vectors PRIVATE NoisePQC::noisepqc Catch2::Catch2 noisepqc_testdata)
 
+# Test: Wiping (secret material is scrubbed before its memory is freed)
+add_executable(test_wiping test_wiping.cpp)
+target_link_libraries(test_wiping PRIVATE NoisePQC::noisepqc Catch2::Catch2)
+
 # Discover Catch2 tests
 include(Catch)
+# PRE_TEST keeps one test list per config; POST_BUILD shares one across multi-config builds
+set(CMAKE_CATCH_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
 catch_discover_tests(test_cipher)
 catch_discover_tests(test_cipherstate)
 catch_discover_tests(test_dh)
@@ -75,3 +81,12 @@ catch_discover_tests(test_pattern)
 catch_discover_tests(test_noise_pq)
 catch_discover_tests(test_hfs)
 catch_discover_tests(test_vectors)
+catch_discover_tests(test_wiping)
+
+# Link-time optimization in Release configs (cmake/BuildConfig.cmake)
+foreach(TARGET_NAME test_cipher test_cipherstate test_dh test_hash test_symmetricstate
+        test_protocol test_handshakestate test_example test_pattern test_noise_pq test_hfs
+        test_vectors)
+    noisepqc_optimize_target(${TARGET_NAME})
+endforeach()
+noisepqc_optimize_target(test_wiping)

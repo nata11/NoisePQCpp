@@ -50,8 +50,14 @@ export namespace Noise
     // HandshakeStatus represents the current state of the handshake
     class HandshakeStatus {
     public:
-        // Error status: nullptr if in progress, HandshakeDoneError if complete, any other for failure
+        // Progress of the handshake; kept in step with err
+        enum class State : std::uint8_t { InProgress, Done, Failed };
+
+        // Error status: nullptr if in progress, HandshakeComplete if complete, any other for failure
         std::exception_ptr err{nullptr};
+
+        // InProgress until the final message is processed, then Done; Failed after any error
+        State state{State::InProgress};
 
         // Public keys discovered during handshake
         PublicKey localEphemeral{};
@@ -64,26 +70,14 @@ export namespace Noise
         // Handshake hash - set once handshake is complete
         std::vector<std::uint8_t> handshakeHash{};
 
-        [[nodiscard]] bool IsComplete() const {
-            if (!err) return false;
-            try {
-                std::rethrow_exception(err);
-            } catch (const HandshakeDoneError&) {
-                return true;
-            } catch (...) {
-                return false;
-            }
+        // Never throws: reads state instead of rethrowing err
+        [[nodiscard]] bool IsComplete() const noexcept {
+            return state == State::Done;
         }
 
-        [[nodiscard]] bool HasError() const {
-            if (!err) return false;
-            try {
-                std::rethrow_exception(err);
-            } catch (const HandshakeDoneError&) {
-                return false;
-            } catch (...) {
-                return true;
-            }
+        // Never throws: reads state instead of rethrowing err
+        [[nodiscard]] bool HasError() const noexcept {
+            return state == State::Failed;
         }
     };
 
@@ -146,17 +140,16 @@ export namespace Noise
                 m_status.localEphemeral = cfg.localEphemeral.public_key;
             }
 
-            // Initialize symmetric state
-            const auto protocolName = cfg.protocol.String();
-            m_ss.InitializeSymmetric(std::span<const std::uint8_t>(
-                reinterpret_cast<const std::uint8_t*>(protocolName.data()),
-                protocolName.size()
-            ));
+            // Initialize symmetric state from the protocol name's bytes
+            m_ss.InitializeSymmetric(cfg.protocol.String());
             m_ss.MixHash(cfg.prologue);
 
             // Handle pre-messages
             HandlePreMessages();
         }
+
+        // A temporary config would dangle: the state keeps a reference to it
+        explicit HandshakeState(HandshakeConfig&&) = delete;
 
         // Delete copy and move constructors/assignments
         HandshakeState(const HandshakeState&) = delete;
@@ -174,6 +167,11 @@ export namespace Noise
             return m_status;
         }
 
+        // Move the transport CipherStates out of the status; GetStatus().cipherStates is empty afterwards
+        [[nodiscard]] std::optional<std::pair<CipherState, CipherState>> TakeCipherStates() noexcept {
+            return std::exchange(m_status.cipherStates, std::nullopt);
+        }
+
         // SymmetricState returns the encapsulated SymmetricState
         [[nodiscard]] const SymmetricState& GetSymmetricState() const {
             return m_ss;
@@ -187,28 +185,25 @@ export namespace Noise
             return m_isInitiator;
         }
 
-        // Reset clears the HandshakeState
+        // Reset scrubs the library's own copies of secret material: the chaining key (then
+        // cleared), the handshake hash (cleared), the embedded CipherState's key, and all three
+        // local keypairs (m_e, m_s, HFS m_e1), generated here or copied from the config. The
+        // caller's HandshakeConfig is never read or modified here. Idempotent (completion + destructor).
         void Reset() {
-            // Clear symmetric state
-            //if (m_ss.ck.size() > 0 || m_ss.h.size() > 0) {
-            if (!m_ss.ck.empty() || !m_ss.h.empty()) {
-                // SymmetricState doesn't have Reset, but we can clear its data
-                m_ss.ck.clear();
-                m_ss.h.clear();
-                m_ss.cs.Reset();
-            }
+            Botan::secure_scrub_memory(m_ss.ck);
+            m_ss.ck.clear();
+            m_ss.h.clear();
+            m_ss.cs.Reset();
+            m_ss.ScrubHkdfState();   // HMAC pads from the last temp key, HKDF outputs, temp key
 
-            // Clear ephemeral key if it wasn't provided by config
-            if (!m_e.IsEmpty() && m_e.private_key != m_cfg.localEphemeral.private_key) {
-                Botan::secure_scrub_memory(m_e.private_key.data(), m_e.private_key.size());
-                m_e = {};
-            }
-
-            // Clear static key if it wasn't provided by config (currently can't happen)
-            if (!m_s.IsEmpty() && m_s.private_key != m_cfg.localStatic.private_key) {
-                Botan::secure_scrub_memory(m_s.private_key.data(), m_s.private_key.size());
-                m_s = {};
-            }
+            ScrubKeyPair(m_e);
+            ScrubKeyPair(m_s);
+            ScrubKeyPair(m_e1);
+            m_eKey.reset();   // Botan zeroizes the loaded key data with the last owner
+            m_sKey.reset();
+            m_reKem.reset();  // the decoded remote ML-KEM keys (public, nothing to scrub)
+            m_rsKem.reset();
+            m_re1Kem.reset();
         }
 
         // WriteMessage processes a write step of the handshake protocol
@@ -223,10 +218,11 @@ export namespace Noise
                 std::rethrow_exception(m_status.err);
             }
 
-            // Check if it's our turn to write
-            if (m_isInitiator != (m_patternIndex & 1) == 0) [[unlikely]] {
+            // Check if it's our turn to write: the initiator writes the even-indexed messages
+            const bool ourTurn = m_isInitiator == ((m_patternIndex & 1) == 0);
+            if (!ourTurn) [[unlikely]] {
                 Log(Color::Red, "WriteMessage: ERROR - out of order (not our turn to write)");
-                m_status.err = std::make_exception_ptr(OutOfOrderError());
+                Fail(std::make_exception_ptr(OutOfOrderError()));
                 std::rethrow_exception(m_status.err);
             }
 
@@ -279,7 +275,7 @@ export namespace Noise
                     }
                 } catch (...) {
                     Log(Color::Red, std::format("WriteMessage: ERROR processing token {}", to_string(token)));
-                    m_status.err = std::current_exception();
+                    Fail(std::current_exception());
                     throw;
                 }
 
@@ -291,7 +287,13 @@ export namespace Noise
             // Encrypt and hash the payload - now appends directly to dst
             LogFunction(Color::Green, "WriteMessage",
                 std::format("Encrypting payload ({} bytes)", payload.size()));
-            m_ss.EncryptAndHash(dst, payload);  // Now modifies dst in place
+            try {
+                m_ss.EncryptAndHash(dst, payload);
+            } catch (...) {
+                Log(Color::Red, "WriteMessage: ERROR - payload encryption failed");
+                Fail(std::current_exception());
+                throw;
+            }
             LogFunction(Color::Green, "WriteMessage",
                 std::format("Total message size after encryption: {} bytes", dst.size()));
 
@@ -299,25 +301,18 @@ export namespace Noise
             if (m_maxMessageSize > 0 && dst.size() - baseLen > static_cast<std::size_t>(m_maxMessageSize)) {
                 Log(Color::Red, std::format("WriteMessage: ERROR - message too large ({} > {})",
                     dst.size() - baseLen, m_maxMessageSize));
-                m_status.err = std::make_exception_ptr(MessageSizeError());
+                Fail(std::make_exception_ptr(MessageSizeError()));
                 std::rethrow_exception(m_status.err);
             }
 
             LogFunction(Color::BrightGreen, "WriteMessage",
                 std::format("Total message size: {} bytes", dst.size()));
 
-            // Check if handshake is done
-            try {
-                return onDone(dst);
-            } catch (const HandshakeDoneError&) {
-                // Handshake complete - return message and set error status
-                m_status.err = std::current_exception();
+            // Advance; on the final message this derives the transport states and marks Done
+            if (onDone()) {
                 LogFunction(Color::BrightGreen, "WriteMessage", "EXIT (handshake complete)");
-                return dst;  // Return the message before throwing
-            } catch (...) {
-                m_status.err = std::current_exception();
-                throw;
             }
+            return dst;
         }
 
         // ReadMessage processes a read step of the handshake protocol
@@ -336,14 +331,15 @@ export namespace Noise
             if (m_maxMessageSize > 0 && message.size() > static_cast<std::size_t>(m_maxMessageSize)) [[unlikely]] {
                 Log(Color::Red, std::format("ReadMessage: ERROR - message too large ({} > {})",
                     message.size(), m_maxMessageSize));
-                m_status.err = std::make_exception_ptr(MessageSizeError());
+                Fail(std::make_exception_ptr(MessageSizeError()));
                 std::rethrow_exception(m_status.err);
             }
 
-            // Check if it's our turn to read
-            if (m_isInitiator != (m_patternIndex & 1) != 0) [[unlikely]] {
+            // Check if it's our turn to read: the initiator reads the odd-indexed messages
+            const bool theirTurn = m_isInitiator == ((m_patternIndex & 1) != 0);
+            if (!theirTurn) [[unlikely]] {
                 Log(Color::Red, "ReadMessage: ERROR - out of order (not our turn to read)");
-                m_status.err = std::make_exception_ptr(OutOfOrderError());
+                Fail(std::make_exception_ptr(OutOfOrderError()));
                 std::rethrow_exception(m_status.err);
             }
 
@@ -392,7 +388,7 @@ export namespace Noise
                     }
                 } catch (...) {
                     Log(Color::Red, std::format("ReadMessage: ERROR processing token {}", to_string(token)));
-                    m_status.err = std::current_exception();
+                    Fail(std::current_exception());
                     throw;
                 }
 
@@ -411,35 +407,32 @@ export namespace Noise
                     std::format("Decrypted payload size: {} bytes", dst.size()));
             } catch (...) {
                 Log(Color::Red, "ReadMessage: ERROR - decryption failed");
-                m_status.err = std::current_exception();
+                Fail(std::current_exception());
                 throw;
             }
 
-            // Check if handshake is done
-            try {
-                onDone(std::vector<std::uint8_t>{});
-                LogFunction(Color::ExtraBrightBlue, "ReadMessage", "EXIT");
-                return dst;  // Return accumulated decrypted data
-            } catch (const HandshakeDoneError&) {
-                // Handshake complete - set error status and return payload
-                m_status.err = std::current_exception();
+            // Advance; on the final message this derives the transport states and marks Done
+            if (onDone()) {
                 LogFunction(Color::ExtraBrightBlue, "ReadMessage", "EXIT (handshake complete)");
-                return dst;  // Return accumulated decrypted data
-            } catch (...) {
-                m_status.err = std::current_exception();
-                throw;
+            } else {
+                LogFunction(Color::ExtraBrightBlue, "ReadMessage", "EXIT");
             }
+            return dst;
         }
 
     private:
         const HandshakeConfig& m_cfg;
         const Dh& m_dh;
-        std::vector<MessagePattern> m_patterns;
+        const std::vector<MessagePattern>& m_patterns;   // the Protocol's messages; the config, and the Protocol it refers to, outlive the state
         SymmetricState m_ss;
         KeyPair m_s;
         KeyPair m_e;
+        std::optional<DhPrivateKey> m_eKey;   // Loaded e (DH only): generated with m_e, or loaded from it on first use
+        std::optional<DhPrivateKey> m_sKey;   // Loaded s (DH only): loaded from m_s at the first static DH token
         PublicKey m_rs;
         PublicKey m_re;
+        std::optional<KemPublicKey> m_rsKem;   // Decoded rs (KEM only): loaded when s was read, or from m_rs at the first skem (config static)
+        std::optional<KemPublicKey> m_reKem;   // Decoded re (KEM only): loaded when e was read, or from m_re at the first ekem
         HandshakeStatus m_status;
         std::uint32_t m_patternIndex;
         std::uint32_t m_pskIndex;
@@ -450,6 +443,26 @@ export namespace Noise
         // HFS (Hybrid Forward Secrecy) state
         KeyPair m_e1;          // Local KEM ephemeral keypair
         PublicKey m_re1;       // Remote KEM ephemeral public key
+        std::optional<KemPublicKey> m_re1Kem;  // Decoded re1: loaded when e1 was read, or from m_re1 at ekem1
+
+        // Scrubs a shared secret when its scope ends (also during unwinding). Declared right
+        // after the vector holds its final value, so the span cannot dangle.
+        class ScrubGuard {
+        public:
+            explicit ScrubGuard(std::vector<std::uint8_t>& secret) : m_bytes{secret} {}
+            ~ScrubGuard() { Botan::secure_scrub_memory(m_bytes); }
+            ScrubGuard(const ScrubGuard&) = delete;
+            ScrubGuard& operator=(const ScrubGuard&) = delete;
+
+        private:
+            std::span<std::uint8_t> m_bytes;
+        };
+
+        // Scrubs a keypair's private key, then empties both keys
+        static void ScrubKeyPair(KeyPair& keypair) {
+            Botan::secure_scrub_memory(keypair.private_key);
+            keypair = {};
+        }
 
         // Logging helpers
         [[nodiscard]] std::string_view GetRoleColor() const {
@@ -489,10 +502,10 @@ export namespace Noise
             for (const auto token : tokens) {
                 switch (token) {
                 case Token::Token_e:
-                    size += m_dhLen;  // Ephemeral public key
+                    size += m_dh.PublicKeySize();  // Ephemeral public key (800 to 1,568 bytes for ML-KEM)
                     break;
                 case Token::Token_s:
-                    size += m_dhLen;  // Static public key
+                    size += m_dh.PublicKeySize();  // Static public key
                     if (hasKey) size += overhead;  // Encrypted
                     break;
                 case Token::Token_ekem:
@@ -534,13 +547,69 @@ export namespace Noise
 
         // Token handlers
 
+        // The loaded ephemeral key for the DH tokens: set by onWriteTokenE when the key is
+        // generated here; a config-provided ephemeral is loaded (one multiplication) on first use
+        // and cached, so every DH token costs one multiplication.
+        [[nodiscard]] const DhPrivateKey& EKey() {
+            if (!m_eKey) {
+                Log(Color::Yellow, "  Loading the ephemeral key once for this handshake");
+                m_eKey.emplace(m_dh.LoadPrivateKey(m_e.private_key));
+            }
+            return *m_eKey;
+        }
+
+        // The loaded static key for the DH tokens: loaded from m_s on first use and cached.
+        // The decoded remote ML-KEM keys for ekem / skem / ekem1: loaded, and so checked,
+        // when the key was read; a config-provided key is loaded on first use, so an invalid one
+        // fails that WriteMessage with InvalidPublicKeyError as before.
+        [[nodiscard]] const KemPublicKey& ReKem() {
+            if (!m_reKem) {
+                Log(Color::Magenta, "  Loading the config-provided remote ephemeral ML-KEM key (first use)");
+                m_reKem.emplace(m_dh.LoadPublicKey(m_re));
+            }
+            return *m_reKem;
+        }
+
+        [[nodiscard]] const KemPublicKey& RsKem() {
+            if (!m_rsKem) {
+                Log(Color::Magenta, "  Loading the config-provided remote static ML-KEM key (first use)");
+                m_rsKem.emplace(m_dh.LoadPublicKey(m_rs));
+            }
+            return *m_rsKem;
+        }
+
+        [[nodiscard]] const KemPublicKey& Re1Kem() {
+            if (!m_re1Kem) {
+                Log(Color::Cyan, "  Loading the remote HFS ephemeral ML-KEM key (first use)");
+                m_re1Kem.emplace(m_cfg.protocol.kem->LoadPublicKey(m_re1));
+            }
+            return *m_re1Kem;
+        }
+
+        [[nodiscard]] const DhPrivateKey& SKey() {
+            if (!m_sKey) {
+                Log(Color::Yellow, "  Loading the static key once for this handshake");
+                m_sKey.emplace(m_dh.LoadPrivateKey(m_s.private_key));
+            }
+            return *m_sKey;
+        }
+
         void onWriteTokenE(std::vector<std::uint8_t>& dst) {
             LogToken(Token::Token_e, "Writing ephemeral key");
 
             // Generate ephemeral key if not pre-generated
             if (m_e.IsEmpty()) {
-                Log(Color::Yellow, "  Generating new ephemeral keypair");
-                m_e = m_dh.GenerateKeypair();
+                if (m_dh.IsKEM()) {
+                    Log(Color::Yellow, "  Generating new ephemeral keypair");
+                    m_e = m_dh.GenerateKeypair();
+                }
+                else {
+                    // The loaded key object comes with the keypair: one derivation
+                    Log(Color::Yellow, "  Generating new ephemeral keypair with its loaded key");
+                    auto [keypair, key] = m_dh.GenerateKeypairWithKey();
+                    m_e = std::move(keypair);
+                    m_eKey.emplace(std::move(key));
+                }
             } else {
                 Log(Color::Yellow, "  Using pre-generated ephemeral keypair");
             }
@@ -576,8 +645,16 @@ export namespace Noise
 
             Log(Color::Yellow, std::format("  Read {} bytes of ephemeral key", pubKeyLen));
 
-            m_re = PublicKey(eBytes.begin(), eBytes.end());
-            m_status.remoteEphemeral = m_re;
+            // An ML-KEM key is checked on receipt (FIPS 203 Section 7.2), before it is
+            // stored, shown to the observer, or mixed in; a bad key fails this ReadMessage.
+            // The decoded key is kept for the ekem token (one decode per received key)
+            if (m_dh.IsKEM()) {
+                m_reKem.emplace(m_dh.LoadPublicKey(eBytes));
+                Log(Color::Yellow, "  Checked and decoded the remote ML-KEM ephemeral key");
+            }
+
+            m_re.assign(eBytes.begin(), eBytes.end());
+            m_status.remoteEphemeral = m_re;   // one copy into each destination
             Log(Color::Yellow, "  Stored remote ephemeral key");
 
             // Call observer if present
@@ -613,7 +690,7 @@ export namespace Noise
             Log(Color::Yellow, std::format("  Static public key size: {} bytes", sBytes.size()));
             Log(Color::Yellow, std::format("  dst size before encryption: {} bytes", dst.size()));
 
-            // This now appends directly to dst (matching Go exactly)
+            // Appends the static key (encrypted once a key is set) directly to dst
             m_ss.EncryptAndHash(dst, sBytes);
 
             Log(Color::Yellow, std::format("  dst size after encryption: {} bytes", dst.size()));
@@ -646,7 +723,14 @@ export namespace Noise
             m_ss.DecryptAndHash(sBytes, temp);
             Log(Color::Yellow, std::format("  Decrypted static key size: {} bytes", sBytes.size()));
 
-            m_rs = sBytes;
+            // A KEM static is encapsulated to later, like e: check it on receipt and keep the
+            // decoded key for the skem token
+            if (m_dh.IsKEM()) {
+                m_rsKem.emplace(m_dh.LoadPublicKey(sBytes));
+                Log(Color::Yellow, "  Checked and decoded the remote ML-KEM static key");
+            }
+
+            m_rs = std::move(sBytes);
             m_status.remoteStatic = m_rs;
             Log(Color::Yellow, "  Stored remote static key");
 
@@ -667,7 +751,8 @@ export namespace Noise
             LogToken(Token::Token_ee, "Performing DH(e, re)");
             Log(Color::Yellow, "  Computing ephemeral-ephemeral DH");
 
-            auto eeBytes = m_dh.DH(m_e.private_key, m_re);
+            auto eeBytes = m_dh.DH(EKey(), m_re);
+            const ScrubGuard eeGuard{eeBytes};
             Log(Color::Yellow, std::format("  DH result: {} bytes", eeBytes.size()));
 
             m_ss.MixKey(eeBytes);
@@ -677,14 +762,15 @@ export namespace Noise
         void onTokenES() {
             LogToken(Token::Token_es, "Performing DH(e, rs) or DH(s, re)");
 
-            std::vector<std::uint8_t> esBytes;
-            if (m_isInitiator) {
-                Log(Color::Yellow, "  Initiator: Computing DH(e, rs)");
-                esBytes = m_dh.DH(m_e.private_key, m_rs);
-            } else {
+            auto esBytes = [this] {
+                if (m_isInitiator) {
+                    Log(Color::Yellow, "  Initiator: Computing DH(e, rs)");
+                    return m_dh.DH(EKey(), m_rs);
+                }
                 Log(Color::Yellow, "  Responder: Computing DH(s, re)");
-                esBytes = m_dh.DH(m_s.private_key, m_re);
-            }
+                return m_dh.DH(SKey(), m_re);
+            }();
+            const ScrubGuard esGuard{esBytes};
             Log(Color::Yellow, std::format("  DH result: {} bytes", esBytes.size()));
 
             m_ss.MixKey(esBytes);
@@ -694,14 +780,15 @@ export namespace Noise
         void onTokenSE() {
             LogToken(Token::Token_se, "Performing DH(s, re) or DH(e, rs)");
 
-            std::vector<std::uint8_t> seBytes;
-            if (m_isInitiator) {
-                Log(Color::Yellow, "  Initiator: Computing DH(s, re)");
-                seBytes = m_dh.DH(m_s.private_key, m_re);
-            } else {
+            auto seBytes = [this] {
+                if (m_isInitiator) {
+                    Log(Color::Yellow, "  Initiator: Computing DH(s, re)");
+                    return m_dh.DH(SKey(), m_re);
+                }
                 Log(Color::Yellow, "  Responder: Computing DH(e, rs)");
-                seBytes = m_dh.DH(m_e.private_key, m_rs);
-            }
+                return m_dh.DH(EKey(), m_rs);
+            }();
+            const ScrubGuard seGuard{seBytes};
             Log(Color::Yellow, std::format("  DH result: {} bytes", seBytes.size()));
 
             m_ss.MixKey(seBytes);
@@ -712,7 +799,8 @@ export namespace Noise
             LogToken(Token::Token_ss, "Performing DH(s, rs)");
             Log(Color::Yellow, "  Computing static-static DH");
 
-            auto ssBytes = m_dh.DH(m_s.private_key, m_rs);
+            auto ssBytes = m_dh.DH(SKey(), m_rs);
+            const ScrubGuard ssGuard{ssBytes};
             Log(Color::Yellow, std::format("  DH result: {} bytes", ssBytes.size()));
 
             m_ss.MixKey(ssBytes);
@@ -730,7 +818,7 @@ export namespace Noise
         }
 
         // ==========================================
-        // NoisePQC++ KEM Token Handlers
+        // PQNoise KEM Token Handlers
         // ==========================================
         // Per PQNoise paper semantics:
         // - ekem: Encapsulate TO peer's ephemeral (m_re)
@@ -751,8 +839,9 @@ export namespace Noise
 
             Log(Color::Magenta, std::format("  Remote ephemeral key size: {} bytes", m_re.size()));
 
-            // Encapsulate to peer's ephemeral public key
-            auto [ciphertext, shared_secret] = m_dh.Encapsulate(m_re);
+            // Encapsulate to peer's ephemeral public key, decoded when e was read
+            auto [ciphertext, shared_secret] = m_dh.Encapsulate(ReKem());
+            const ScrubGuard secretGuard{shared_secret};
             Log(Color::Magenta, std::format("  Generated ciphertext: {} bytes", ciphertext.size()));
             Log(Color::Magenta, std::format("  Shared secret: {} bytes", shared_secret.size()));
 
@@ -800,20 +889,12 @@ export namespace Noise
 
             // Decapsulate using local ephemeral private key
             auto shared_secret = m_dh.Decapsulate(m_e.private_key, ciphertext);
+            const ScrubGuard secretGuard{shared_secret};
             Log(Color::Magenta, std::format("  Decapsulated shared secret: {} bytes", shared_secret.size()));
 
             // Then MixKey(k)
             m_ss.MixKey(shared_secret);
             Log(Color::Magenta, "  Mixed shared secret into chaining key");
-
-            // Call observer if present (notify about KEM operation with peer's ephemeral)
-            if (m_cfg.observer) {
-                Log(Color::Magenta, "  Calling observer for KEM operation (peer ephemeral)");
-                if (auto err = m_cfg.observer->OnPeerPublicKey(Token::Token_ekem, m_re)) {
-                    Log(Color::Red, "  ERROR: Observer rejected KEM operation");
-                    throw NoiseError(*err);
-                }
-            }
 
             Log(Color::Magenta, std::format("  {} bytes remaining in message", tail.size()));
             return tail;
@@ -834,8 +915,10 @@ export namespace Noise
 
             Log(Color::Magenta, std::format("  Remote static key size: {} bytes", m_rs.size()));
 
-            // Encapsulate to peer's static public key
-            auto [ciphertext, shared_secret] = m_dh.Encapsulate(m_rs);
+            // Encapsulate to peer's static public key, decoded when s was read (or now, for a
+            // pre-message static from the config)
+            auto [ciphertext, shared_secret] = m_dh.Encapsulate(RsKem());
+            const ScrubGuard secretGuard{shared_secret};
             Log(Color::Magenta, std::format("  Generated ciphertext: {} bytes", ciphertext.size()));
             Log(Color::Magenta, std::format("  Shared secret: {} bytes", shared_secret.size()));
 
@@ -888,20 +971,12 @@ export namespace Noise
 
             // Decapsulate using local static private key
             auto shared_secret = m_dh.Decapsulate(m_s.private_key, ciphertext);
+            const ScrubGuard secretGuard{shared_secret};
             Log(Color::Magenta, std::format("  Decapsulated shared secret: {} bytes", shared_secret.size()));
 
             // Per PQNoise: MixKeyAndHash binds the shared secret into both ck and h
             m_ss.MixKeyAndHash(shared_secret);
             Log(Color::Magenta, "  Mixed shared secret into chaining key and handshake hash");
-
-            // Call observer if present (notify about KEM operation with peer's static)
-            if (m_cfg.observer) {
-                Log(Color::Magenta, "  Calling observer for KEM operation (peer static)");
-                if (auto err = m_cfg.observer->OnPeerPublicKey(Token::Token_skem, m_rs)) {
-                    Log(Color::Red, "  ERROR: Observer rejected KEM operation");
-                    throw NoiseError(*err);
-                }
-            }
 
             Log(Color::Magenta, std::format("  {} bytes remaining in message", tail.size()));
             return tail;
@@ -910,7 +985,7 @@ export namespace Noise
         // ==========================================
         // HFS (Hybrid Forward Secrecy) Token Handlers
         // ==========================================
-        // Per noise-kem-hfs.pdf spec:
+        // Per the Noise Protocol HFS spec extension:
         // - e1: Generate KEM keypair, send public key (encrypted if key available)
         // - ekem1: Encapsulate to peer's e1, send ciphertext (encrypted if key available), MixKey(kem_output)
 
@@ -932,7 +1007,7 @@ export namespace Noise
             Log(Color::Cyan, std::format("  Generated HFS ephemeral keypair (public key: {} bytes, private key: {} bytes)",
                 m_e1.public_key.size(), m_e1.private_key.size()));
 
-            // Per noise-kem-hfs spec: "transferred as if it was a static DH public key
+            // Per the Noise Protocol HFS spec extension: "transferred as if it was a static DH public key
             // (i.e. using EncryptAndHash() if a key is available)"
             const bool encrypted = m_ss.cs.HasKey();
             Log(Color::Cyan, std::format("  Transmitting e1 public key ({}, dst before: {} bytes)",
@@ -980,8 +1055,12 @@ export namespace Noise
             Log(Color::Cyan, std::format("  Received peer's e1 public key: {} bytes ({})",
                 pubKey.size(), encrypted ? "decrypted" : "plaintext"));
 
+            // Check the KEM key on receipt (FIPS 203 Section 7.2), before storing it, and keep
+            // the decoded key for ekem1
+            m_re1Kem.emplace(kem.LoadPublicKey(pubKey));
+
             // Store remote KEM ephemeral public key for later use in ekem1
-            m_re1 = PublicKey(pubKey.begin(), pubKey.end());
+            m_re1 = std::move(pubKey);
             Log(Color::Cyan, "  Stored peer's HFS ephemeral key as re1 (for ekem1 encapsulation)");
 
             // Call observer if present
@@ -1015,14 +1094,15 @@ export namespace Noise
             Log(Color::Cyan, std::format("  HFS KEM algorithm: {}", kem.String()));
             Log(Color::Cyan, std::format("  Encapsulating to peer's re1 ({} bytes)", m_re1.size()));
 
-            // Encapsulate to peer's KEM ephemeral public key
+            // Encapsulate to peer's KEM ephemeral public key, decoded when e1 was read
             // This generates a ciphertext that only the peer can decapsulate, plus a shared secret
-            auto [ciphertext, kem_output] = kem.Encapsulate(m_re1);
+            auto [ciphertext, kem_output] = kem.Encapsulate(Re1Kem());
+            const ScrubGuard secretGuard{kem_output};
             Log(Color::Cyan, std::format("  KEM encapsulation complete:"));
             Log(Color::Cyan, std::format("    Ciphertext: {} bytes (to transmit)", ciphertext.size()));
             Log(Color::Cyan, std::format("    Shared secret: {} bytes (for key derivation)", kem_output.size()));
 
-            // Per noise-kem-hfs spec: "transferred as if it was a static DH public key"
+            // Per the Noise Protocol HFS spec extension: "transferred as if it was a static DH public key"
             const bool encrypted = m_ss.cs.HasKey();
             Log(Color::Cyan, std::format("  Transmitting ciphertext ({}, dst before: {} bytes)",
                 encrypted ? "encrypted" : "plaintext", dst.size()));
@@ -1030,7 +1110,7 @@ export namespace Noise
             Log(Color::Cyan, std::format("  Ciphertext transmitted (dst after: {} bytes)", dst.size()));
 
             // Mix the KEM output into the chaining key
-            // Per noise-kem-hfs spec: "the parties call MixKey(kem_output)"
+            // Per the Noise Protocol HFS spec extension: "the parties call MixKey(kem_output)"
             // This derives new encryption keys incorporating the post-quantum shared secret
             m_ss.MixKey(kem_output);
             Log(Color::Cyan, "  MixKey(kem_output) - HFS shared secret mixed into chaining key");
@@ -1082,11 +1162,12 @@ export namespace Noise
             // Only we can do this since we hold the e1 private key
             Log(Color::Cyan, std::format("  Decapsulating with local e1 private key ({} bytes)", m_e1.private_key.size()));
             auto kem_output = kem.Decapsulate(m_e1.private_key, ciphertext);
+            const ScrubGuard secretGuard{kem_output};
             Log(Color::Cyan, std::format("  KEM decapsulation complete:"));
             Log(Color::Cyan, std::format("    Shared secret: {} bytes (matches peer's)", kem_output.size()));
 
             // Mix the KEM output into the chaining key
-            // Per noise-kem-hfs spec: "the parties call MixKey(kem_output)"
+            // Per the Noise Protocol HFS spec extension: "the parties call MixKey(kem_output)"
             // This derives new encryption keys incorporating the post-quantum shared secret
             m_ss.MixKey(kem_output);
             Log(Color::Cyan, "  MixKey(kem_output) - HFS shared secret mixed into chaining key");
@@ -1095,40 +1176,57 @@ export namespace Noise
             return tail;
         }
 
-        std::vector<std::uint8_t> onDone(std::vector<std::uint8_t> dst) {
+        // Advance the pattern index; on the final message derive the transport states, scrub,
+        // and mark the status Done. Returns true if this call completed the handshake.
+        bool onDone() {
             m_patternIndex++;
             Log(Color::BrightWhite, std::format("Pattern index incremented to {}", m_patternIndex));
 
             if (m_patternIndex < m_patterns.size()) {
                 Log(Color::BrightWhite, std::format("More patterns remaining ({}/{})", m_patternIndex + 1, m_patterns.size()));
-                return dst;
+                return false;
             }
 
             // Handshake is complete
             Log(Color::BrightWhite, std::format("{}=== HANDSHAKE COMPLETE ===", Color::Bold));
-            m_status.err = std::make_exception_ptr(HandshakeDoneError());
+            try {
+                Log(Color::BrightWhite, "Splitting cipher states...");
+                auto [cs1, cs2] = m_ss.Split();
 
-            Log(Color::BrightWhite, "Splitting cipher states...");
-            auto [cs1, cs2] = m_ss.Split();
+                // For one-way patterns, clear cs2
+                if (IsOneWayPattern()) {
+                    Log(Color::BrightWhite, "One-way pattern detected, clearing second cipher state");
+                    cs2.Reset();
+                }
 
-            // For one-way patterns, clear cs2
-            if (IsOneWayPattern()) {
-                Log(Color::BrightWhite, "One-way pattern detected, clearing second cipher state");
-                cs2.Reset();
+                m_status.cipherStates.emplace(std::move(cs1), std::move(cs2));
+                Log(Color::BrightWhite, "Cipher states stored in status");
+
+                m_status.handshakeHash = m_ss.GetHandshakeHash();
+                Log(Color::BrightWhite, std::format("Handshake hash captured ({} bytes)", m_status.handshakeHash.size()));
+
+                // Clean up sensitive data, then record completion
+                Log(Color::BrightWhite, "Cleaning up sensitive handshake data");
+                Reset();
+                MarkDone();
+            } catch (...) {
+                Log(Color::Red, "onDone: ERROR - deriving the transport states failed");
+                Fail(std::current_exception());
+                throw;
             }
+            return true;
+        }
 
-            m_status.cipherStates.emplace(std::move(cs1), std::move(cs2));
-            Log(Color::BrightWhite, "Cipher states stored in status");
+        // Record a failure: err holds the exception, state becomes Failed
+        void Fail(std::exception_ptr e) noexcept {
+            m_status.err = std::move(e);
+            m_status.state = HandshakeStatus::State::Failed;
+        }
 
-            m_status.handshakeHash = m_ss.GetHandshakeHash();
-            Log(Color::BrightWhite, std::format("Handshake hash captured ({} bytes)", m_status.handshakeHash.size()));
-
-            // Clean up sensitive data
-            Log(Color::BrightWhite, "Cleaning up sensitive handshake data");
-            Reset();
-
-            // Throw to signal completion
-            throw HandshakeDoneError();
+        // Record completion: err holds a HandshakeComplete (tri-state kept, nothing thrown), state becomes Done
+        void MarkDone() {
+            m_status.err = std::make_exception_ptr(HandshakeComplete());
+            m_status.state = HandshakeStatus::State::Done;
         }
 
         void HandlePreMessages() {
@@ -1225,12 +1323,8 @@ export namespace Noise
         }
 
         [[nodiscard]] bool IsOneWayPattern() const {
-            // One-way patterns have only one message
-            // Common one-way patterns: N, K, X and their psk variants
-            //const auto& patternName = m_cfg.protocol.pattern.m_patternName;
-            //return patternName == "N" || patternName == "K" || patternName == "X";
-            const auto& pattern = m_cfg.protocol.pattern;
-            return pattern.isOneWay;
+            // One-way patterns (N, K, X, pqN and their psk variants) have exactly one message
+            return m_patterns.size() == 1;
         }
     };
 }

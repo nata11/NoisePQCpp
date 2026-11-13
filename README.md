@@ -14,27 +14,27 @@ NoisePQC++ is a modern, type-safe implementation of the [Noise Protocol Framewor
 
 - **Modern C++23**: Uses C++ modules for better encapsulation and compile times
 - **Type-Safe Cryptography**: Strong type system prevents common cryptographic mistakes
-- **Complete Noise Protocol**: Full support for all 57 classical Noise handshake patterns (15 base + 21 deferred + 21 PSK)
-- **Post-Quantum Ready**: ML-KEM (CRYSTALS-Kyber) support with pqXX, pqNK, and other PQ patterns
-- **Hybrid Forward Secrecy**: HFS patterns combining classical DH with post-quantum KEM
-- **Cross-Platform**: Supports macOS (ARM64, Apple Silicon; x86_64 Intel untested), Linux (x86_64, ARM64), and Windows (x86_64)
-- **Well-Tested**: Comprehensive test suite with 200+ test cases and 500+ assertions
+- **Complete Noise Protocol**: Full support for all 59 classical Noise handshake patterns (3 one-way + 12 interactive + 23 deferred + 21 PSK)
+- **Post-Quantum Ready**: ML-KEM (CRYSTALS-Kyber) support with 13 PQ patterns (1 one-way + 12 interactive), such as pqXX and pqNK
+- **Hybrid Forward Secrecy**: 35 HFS patterns (12 interactive + 23 deferred) combining classical DH with post-quantum KEM
+- **Cross-Platform**: Supports macOS (ARM64, Apple Silicon), Linux (x86_64, ARM64), and Windows (x86_64)
+- **Well-Tested**: Comprehensive test suite with 374 test cases in 13 executables
 - **Modular Design**: Clean separation between cipher, hash, DH, KEM, and state management
 - **ASIO Networking Examples**: Ready-to-use TCP client/server examples with Noise Protocol
-- **Performance Optimized**: Direct buffer operations with zero-copy design for minimal memory allocations
+- **Performance Optimized**: Data is encrypted and decrypted directly into output buffers, keeping copies and memory allocations to a minimum
 - **Comprehensive Benchmarking**: Google Benchmark integration with handshake and network performance benchmarks
-- **Instrumentation**: Debug builds provide color-coded, real-time logging of handshake state transitions, token processing, and key exchanges—ideal for learning and protocol analysis. See [LoggingAndDebugging.md](docs/LoggingAndDebugging.md)
+- **Instrumentation**: Builds with `NOISE_DEBUG_BUILD` (on by default) provide color-coded, real-time logging of handshake state transitions, token processing, and key exchanges—ideal for learning and protocol analysis. See [LoggingAndDebugging.md](docs/LoggingAndDebugging.md)
 
 ### Supported Algorithms
 
 #### Symmetric Ciphers
 
-- ChaCha20-Poly1305 (default)
+- ChaCha20-Poly1305 (default for `Cipher()`)
 - AES-256-GCM
 
 #### Hash Functions
 
-- SHA-256 (default)
+- SHA-256 (default for `Hash()`)
 - SHA-512
 - BLAKE2b
 - BLAKE2s
@@ -52,7 +52,7 @@ NoisePQC++ is a modern, type-safe implementation of the [Noise Protocol Framewor
 
 #### Noise Handshake Patterns
 
-**Classical Patterns (57 Total)**
+**Classical Patterns (59 Total)**
 
 **One-Way Patterns** (3):
 - N, K, X
@@ -60,7 +60,7 @@ NoisePQC++ is a modern, type-safe implementation of the [Noise Protocol Framewor
 **Fundamental Interactive Patterns** (12):
 - NN, NK, NX, KN, KK, KX, XN, XK, XX, IN, IK, IX
 
-**Deferred Patterns** (21):
+**Deferred Patterns** (23):
 - NK1, NX1, X1N, X1K, XK1, X1K1, X1X, XX1, X1X1
 - K1N, K1K, KK1, K1K1, K1X, KX1, K1X1
 - I1N, I1K, IK1, I1K1, I1X, IX1, I1X1
@@ -72,17 +72,18 @@ NoisePQC++ is a modern, type-safe implementation of the [Noise Protocol Framewor
 - KNpsk0, KNpsk2, KKpsk0, KKpsk2, KXpsk2
 - INpsk1, INpsk2, IKpsk1, IKpsk2, IXpsk2
 
-**Post-Quantum Patterns (PQNoise)**:
+**Post-Quantum Patterns (PQNoise)** (13):
 - pqN, pqNN, pqNK, pqNX
 - pqXN, pqXK, pqXX
 - pqKN, pqKK, pqKX
 - pqIN, pqIK, pqIX
 
-**Hybrid Forward Secrecy (HFS) Patterns**:
+**Hybrid Forward Secrecy (HFS) Patterns** (35):
 - NNhfs, NKhfs, NXhfs
 - XNhfs, XKhfs, XXhfs
 - KNhfs, KKhfs, KXhfs
 - INhfs, IKhfs, IXhfs
+- Deferred: the 23 deferred patterns with the `hfs` suffix (NK1hfs … I1X1hfs)
 
 All classical, PQ, and HFS patterns are implemented and covered by automated tests.
 
@@ -91,42 +92,33 @@ All classical, PQ, and HFS patterns are implemented and covered by automated tes
 ### Prerequisites
 
 - **C++23 Compiler**:
-  - Clang 21.1.x (Required for C++ modules and "import std;". Tested on macOS (Apple Silicon), Linux (x86_64, ARM64, Raspberry Pi 5 ARM64)
-  - MSVC 19.44+ (Visual Studio 2022 Update 17+ for Windows 11)
-  - GCC 15.2.0 (Required for C++ modules and "import std;". Tested on Linux x86_64)
+  - Clang 21.1.x (Required for C++ modules and "import std;". Tested on macOS (Apple Silicon), Linux (x86_64, ARM64, Raspberry Pi 5 ARM64))
+  - MSVC 19.44+ (Visual Studio 2022 17.14+, Windows 11 x86_64; build with `-G Ninja`, see [docs/BuildGuide.md](docs/BuildGuide.md#windows-x86_64))
+  - GCC 15.2+ (Required for C++ modules and "import std;". Tested on Linux x86_64)
 - **CMake** 4.3+ (required for `import std;` support)
 - **Ninja** build system (required for C++ modules)
-- **Catch2** v3.11.0 (automatically downloaded via CMake FetchContent if not found system-wide)
-- **ASIO** (standalone, non-Boost) for networking examples (automatically downloaded via CMake FetchContent if not found system-wide)
+- **Catch2** v3.16.1 (downloaded automatically via CMake FetchContent and built with the project's toolchain)
+- **Google Benchmark** v1.10.0 for the benchmarks (downloaded automatically via CMake FetchContent)
+- **ASIO** 1.39.0 (standalone, non-Boost) for the networking examples and network benchmarks (downloaded automatically via CMake FetchContent)
 - **Botan** 3.13.0 (included in `third_party/` for multiple platforms)
+- **Minimum CPU**: x86-64-v3 (AVX2) on x86_64 Linux and Windows; Cortex-A76 (ARMv8.2-A) on arm64 Linux, Raspberry Pi 5 included. The defaults and the `-DNOISE_BOTAN_ARCH_FLAGS` override are in [ISA baseline, optimization and linking](docs/BuildGuide.md#isa-baseline-optimization-and-linking)
 
 ### Build Instructions
 
-**Note**: On first CMake run, Catch2 and Google Benchmark will be automatically downloaded via FetchContent if not found system-wide.
+**Note**: On the first CMake configure of a build tree, Catch2, asio and Google Benchmark (when benchmarks are enabled and the build is Release or multi-config) are downloaded automatically via FetchContent and built with the project's toolchain; a system-wide installation is never used.
 
-**Pre-built Botan 3.13.0** minimized build sources are provided in `third_party/` for:
-- **macOS**: ARM64 (Apple Silicon) with Clang 21; x86_64 (Intel) is included but untested, and will be removed in a future release
+**Botan 3.13.0** minimized build sources are provided in `third_party/` for:
+- **macOS**: ARM64 (Apple Silicon) with Clang 21
 - **Linux**: x86_64 and ARM64 with GCC 15.2 and Clang 21
 - **Windows**: x86_64 with MSVC 19.44+
 
 ```bash
 # Configure with Ninja (required for C++ modules)
 # Use the appropriate toolchain file for your platform:
-#   - macOS (Apple Silicon; Intel untested): cmake/clang21-macOS-toolchain.cmake
+#   - macOS (Apple Silicon): cmake/clang21-macOS-toolchain.cmake
 #   - Linux incl. Raspberry Pi 5 (Clang 21): cmake/clang21-linux-toolchain.cmake
 #   - Linux (GCC 15.2+): cmake/gcc15-linux-toolchain.cmake
-#   - Windows (MSVC): no toolchain file needed
-
-# Example for Linux (Clang 21):
-cmake -B build -S . -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-linux-toolchain.cmake
-
-# Build (Catch2 will download on first run if needed)
-cmake --build build
-
-# Run tests
-cd build
-ctest --output-on-failure
+#   - Windows (MSVC): no toolchain file; in the x64 Native Tools Command Prompt: cmake --workflow --preset windows-release
 ```
 
 ### Linux (Clang 21)
@@ -134,9 +126,9 @@ ctest --output-on-failure
 **Supported Architectures**: x86_64 and ARM64 (tested on Ubuntu 26.04 x86_64/ARM64 and Raspberry Pi 5 on Debian Trixie)
 
 ```bash
-# Install dependencies. See cmake note in BuildGuide.md for experimental import std module support.
+# Install dependencies. The packaged cmake may be older than 4.3; see the CMake note in docs/BuildGuide.md.
 sudo apt update
-sudo apt install cmake ninja-build clang-21 libc++-21-dev libc++abi-21-dev
+sudo apt install cmake ninja-build clang-21 clang-tools-21 llvm-21 libc++-21-dev libc++abi-21-dev
 
 # Configure with the Linux Clang toolchain file
 # The toolchain file handles: compiler paths, libc++, headers, and linker flags
@@ -154,41 +146,43 @@ For platform-specific instructions (macOS, Raspberry Pi, GCC 15.2+, Windows, Doc
 
 ## Testing
 
-The project includes a comprehensive test suite with **200+ test cases** and **500+ assertions**:
+The project includes a comprehensive test suite with **374 test cases** in 13 executables:
 
 ```bash
 # Run all tests
-cd build
-ctest --output-on-failure
+ctest --test-dir build --output-on-failure
 
 # Run specific test modules
-./tests/test_cipher              # Cipher operations
-./tests/test_hash                # Hash functions
-./tests/test_dh                  # Diffie-Hellman and ML-KEM
-./tests/test_cipherstate         # CipherState
-./tests/test_symmetricstate      # SymmetricState
-./tests/test_protocol            # Protocol parsing
-./tests/test_handshakestate      # All 57 classical patterns
-./tests/test_noise_pq            # Post-Quantum patterns
-./tests/test_hfs                 # Hybrid Forward Secrecy
-./tests/test_vectors             # Test vector validation
+./build/bin/tests/test_cipher          # Cipher operations
+./build/bin/tests/test_hash            # Hash functions
+./build/bin/tests/test_dh              # Diffie-Hellman and ML-KEM
+./build/bin/tests/test_cipherstate     # CipherState
+./build/bin/tests/test_symmetricstate  # SymmetricState
+./build/bin/tests/test_protocol        # Protocol parsing
+./build/bin/tests/test_pattern         # Pattern validation
+./build/bin/tests/test_handshakestate  # All 59 classical patterns
+./build/bin/tests/test_noise_pq        # Post-Quantum patterns
+./build/bin/tests/test_hfs             # Hybrid Forward Secrecy
+./build/bin/tests/test_vectors         # Cacophony test vectors
+./build/bin/tests/test_wiping          # Secret wiping
+./build/bin/tests/test_example         # End-to-end API example
 
 # Run with Catch2 filters
-./tests/test_handshakestate "[xx]"        # XX pattern only
-./tests/test_handshakestate "[oneway]"    # All one-way patterns
-./tests/test_handshakestate "[psk]"       # All PSK patterns
-./tests/test_handshakestate "[deferred]"  # All deferred patterns
-./tests/test_noise_pq "[pqxx]"            # pqXX pattern only
-./tests/test_hfs "[xxhfs]"                # XXhfs pattern only
-./tests/test_handshakestate --list-tests  # List all test cases
+./build/bin/tests/test_handshakestate "[xx]"        # XX pattern only
+./build/bin/tests/test_handshakestate "[oneway]"    # All one-way patterns
+./build/bin/tests/test_handshakestate "[psk]"       # All PSK patterns
+./build/bin/tests/test_handshakestate "[deferred]"  # All deferred patterns
+./build/bin/tests/test_noise_pq "[pqxx]"            # pqXX pattern only
+./build/bin/tests/test_hfs "[xxhfs]"                # XXhfs pattern only
+./build/bin/tests/test_handshakestate --list-tests  # List all test cases
 ```
 
 **Test Coverage**:
 - Cryptographic primitives (Cipher, Hash, DH, KEM)
 - State management (CipherState, SymmetricState)
-- All 57 classical Noise handshake patterns
-- Post-Quantum patterns (pqNN, pqNK, pqXX, etc.)
-- Hybrid Forward Secrecy patterns (XXhfs, NKhfs, etc.)
+- All 59 classical Noise handshake patterns (3 one-way + 12 interactive + 23 deferred + 21 PSK)
+- All 13 PQ patterns (1 one-way + 12 interactive)
+- All 35 HFS patterns (12 interactive + 23 deferred)
 - ML-KEM encapsulation/decapsulation
 - Error handling and edge cases
 - Observer pattern and callbacks
@@ -199,18 +193,20 @@ For detailed testing documentation, see [tests/README.md](tests/README.md) and [
 
 ## Benchmarking
 
-NoisePQC++ includes comprehensive performance benchmarks using Google Benchmark.
+NoisePQC++ includes Google Benchmark micro-benchmarks and TCP network benchmarks.
 
 **Available Benchmarks**:
 - **bench_handshake** - Measures handshake performance for classical, PQ, and HFS patterns
+- **bench_example** - SHA-256 hashing, X25519 key generation and DH
 - **bench_client** - Network handshake performance from client perspective
-- **bench_server** - Network handshake performance from server perspective
+- **bench_server** - Responder that bench_client and bench_stress connect to
 - **bench_stress** - Stress testing tool for concurrent handshakes
 
 **Performance Analysis**:
 The `analysis/` directory contains tools for analyzing benchmark results:
 - **benchmark_analysis.ipynb** - Jupyter notebook for visualizing performance data
 - **scripts/json_to_csv.py** - Convert JSON benchmark output to CSV for analysis
+- **scripts/render_results.py** - Render benchmark CSVs into figures and a Markdown summary
 
 For detailed benchmarking documentation, see [benchmarks/README.md](benchmarks/README.md).
 
@@ -222,7 +218,7 @@ For detailed benchmarking documentation, see [benchmarks/README.md](benchmarks/R
 import noise;
 using namespace Noise;
 
-// Create protocol: Noise_XX_X25519_ChaChaPoly_SHA256
+// Create protocol: Noise_XX_25519_ChaChaPoly_SHA256
 Protocol protocol(XX, X25519, ChaChaPoly, SHA256);
 
 // Generate static keys for both parties
@@ -248,7 +244,8 @@ HandshakeState aliceHs(aliceCfg);
 HandshakeState bobHs(bobCfg);
 
 // Message 1: Alice -> Bob
-auto msg1 = aliceHs.WriteMessage({'h', 'e', 'l', 'l', 'o'});
+std::vector<std::uint8_t> hello{'h', 'e', 'l', 'l', 'o'};
+auto msg1 = aliceHs.WriteMessage(hello);
 auto recv1 = bobHs.ReadMessage(msg1);
 
 // Message 2: Bob -> Alice
@@ -259,9 +256,12 @@ aliceHs.ReadMessage(msg2);
 auto msg3 = aliceHs.WriteMessage({});
 bobHs.ReadMessage(msg3);
 
-// Both sides now have matching cipher states for secure communication
-auto [aliceTx, aliceRx] = *aliceHs.GetStatus().cipherStates;
-auto [bobRx, bobTx] = *bobHs.GetStatus().cipherStates;
+// Both sides now have matching cipher states for secure communication:
+// take them (moved out of the HandshakeState, not copied)
+auto aliceStates = aliceHs.TakeCipherStates();   // std::optional<std::pair<CipherState, CipherState>>
+auto& [aliceTx, aliceRx] = *aliceStates;          // initiator: cs1 sends, cs2 receives
+auto bobStates = bobHs.TakeCipherStates();
+auto& [bobRx, bobTx] = *bobStates;                // responder: cs1 receives, cs2 sends
 
 // Use cipher states for transport encryption
 std::vector<std::uint8_t> message{'s', 'e', 'c', 'r', 'e', 't'};
@@ -285,7 +285,7 @@ The [examples/](examples/) directory contains comprehensive demonstrations:
   - Complete PQ handshake lifecycle
 
 - **[pattern_zoo.cpp](examples/pattern_zoo.cpp)** - Interactive pattern explorer
-  - Demonstrates all Noise handshake patterns (classical, PQ, HFS)
+  - Demonstrates 84 patterns: all 59 classical and 13 PQ patterns, and the 12 interactive HFS patterns
   - Run any pattern by name: `./pattern_zoo XX`, `./pattern_zoo pqXX`, `./pattern_zoo XXhfs`
   - Shows message flows and state transitions
 
@@ -301,7 +301,7 @@ For detailed usage instructions and more examples, see [examples/README.md](exam
 
 Comprehensive documentation is available in the [docs/](docs/) directory:
 
-- **[PatternGuide.md](docs/PatternGuide.md)** - Complete guide to all 57 Noise patterns with use cases and examples
+- **[PatternGuide.md](docs/PatternGuide.md)** - Guide to the classical, PQ and HFS patterns with use cases and examples
 - **[Architecture.md](docs/Architecture.md)** - System architecture, design principles, and module organization
 - **[API.md](docs/API.md)** - Complete API reference for all modules with examples
 - **[BuildGuide.md](docs/BuildGuide.md)** - Detailed build instructions for all platforms
@@ -318,9 +318,9 @@ Comprehensive documentation is available in the [docs/](docs/) directory:
 
 ## Development Status
 
-**Current Version**: 1.0.0 (Performance Optimized PQC + HFS Noise Protocol Framework)
+**Current Version**: 1.1.0 (Performance Optimized PQC + HFS Noise Protocol Framework)
 
-This release includes complete implementations of classical Noise, Post-Quantum Noise (PQNoise), and Hybrid Forward Secrecy (HFS) patterns, providing quantum-resistant cryptographic options alongside classical primitives. Version 1.0.0 is the first stable release and completes the toolchain modernization: Clang 21, GCC 15.2, CMake 4.3, and Botan 3.13.0 across every supported platform, with all documentation brought in line.
+This release includes complete implementations of classical Noise, Post-Quantum Noise (PQNoise), and Hybrid Forward Secrecy (HFS) patterns, providing quantum-resistant cryptographic options alongside classical primitives. Version 1.1.0 follows a complete review of the library code: Botan exceptions no longer cross the API (failures surface as `NoiseError` and its subclasses), keys and protocol names are checked earlier, secret material is scrubbed as soon as it is no longer needed, and handshakes cost fewer instructions and allocations. The build adds an ISA baseline, link-time optimization, dead-stripping and a static C++ runtime on Linux. 1.1.0 has breaking changes; see the [CHANGELOG](CHANGELOG.md).
 
 Implemented components:
 
@@ -331,9 +331,9 @@ Implemented components:
 - ✅ **CipherState** (complete with rekey support)
 - ✅ **SymmetricState** (complete with HKDF)
 - ✅ **HandshakeState** (complete with observer pattern)
-- ✅ **Classical Patterns** (all 57 patterns: 3 one-way + 12 fundamental + 21 deferred + 21 PSK)
-- ✅ **Post-Quantum Patterns** (pqN, pqNN, pqNK, pqNX, pqXN, pqXK, pqXX, pqKN, pqKK, pqKX, pqIN, pqIK, pqIX)
-- ✅ **HFS Patterns** (NNhfs, NKhfs, NXhfs, XXhfs, and all other interactive patterns with HFS modifier)
+- ✅ **Classical Patterns** (all 59 patterns: 3 one-way + 12 interactive + 23 deferred + 21 PSK)
+- ✅ **Post-Quantum Patterns** (13: pqN one-way + 12 interactive: pqNN, pqNK, pqNX, pqXN, pqXK, pqXX, pqKN, pqKK, pqKX, pqIN, pqIK, pqIX)
+- ✅ **HFS Patterns** (35: 12 interactive + 23 deferred; every interactive base pattern with the hfs modifier)
 - ✅ **Protocol** (complete protocol specification with PQ/HFS support)
 - ✅ **ASIO Networking** (TCP client/server examples with multi-mode support)
 
@@ -372,13 +372,13 @@ Suggested BibTeX:
   title        = {NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography},
   year         = {2026},
   url          = {https://github.com/nata11/NoisePQCpp},
-  version      = {1.0.0}
+  version      = {1.1.0}
 }
 ```
 
 Suggested text citation:
 
-> Ahmed, Nadeem (2026). _NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography._ Version 1.0.0, 2026 https://github.com/nata11/NoisePQCpp
+> Ahmed, Nadeem (2026). _NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography._ Version 1.1.0, 2026. https://github.com/nata11/NoisePQCpp
 
 For reproducibility in scholarly work, please also record the exact version,
 release tag, or commit hash used in your experiments.
@@ -391,13 +391,11 @@ its own license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 ## References
 
 - [Noise Protocol Framework Specification](https://noiseprotocol.org/noise.html)
-- [Botan Crypto Library](https://botan.randombit.net/)
-- [Catch2 Testing Framework](https://github.com/catchorg/Catch2)
-- [Google Benchmark](https://github.com/google/benchmark)
 
 ## Acknowledgments
 
 Built with:
 - [Botan 3.13.0](https://botan.randombit.net/) - Cryptographic primitives
-- [Catch2 v3.11.0](https://github.com/catchorg/Catch2) - Testing framework
-- [Google Benchmark](https://github.com/google/benchmark) - Micro benchmarking
+- [Catch2 v3.16.1](https://github.com/catchorg/Catch2) - Testing framework
+- [Google Benchmark v1.10.0](https://github.com/google/benchmark) - Micro benchmarking
+- [asio 1.39.0](https://github.com/chriskohlhoff/asio) - Networking (examples and network benchmarks)

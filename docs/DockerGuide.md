@@ -4,44 +4,46 @@ Pre-configured Docker images provide everything needed to build, test, and bench
 
 Two generations of images are published on GitHub Container Registry (GHCR):
 
-- **Current (1.0.0)**: Ubuntu 26.04 with Clang 21 or GCC 15.2, and CMake 4.3.5. These track `main` and match the toolchain files in `cmake/`. Use these unless you are reproducing the 0.9.0 paper results.
+- **Current (1.1.0)**: Ubuntu 26.04 with Clang 21 or GCC 15.2, and CMake 4.3.5. These are built from `docker/clang21-ubuntu26/` and `docker/gcc15-ubuntu26/` and match the toolchain files in `cmake/`. Use these unless you are reproducing the 0.9.0 paper results. The 1.0.0 images stay published and are pulled by digest; see [Published Digests for Version 1.0.0](#published-digests-for-version-100).
 - **Archived (0.9.0, paper artifact)**: Debian Trixie with Clang 18 or GCC 15.2, and CMake 4.0.4. These are pinned to the `v0.9.0` release and its paper artifact, and are kept unchanged so published digests stay reproducible. See [Archived Images (0.9.0 — Paper Artifact)](#archived-images-090--paper-artifact).
 
-## Current Images (1.0.0)
+## Current Images (1.1.0)
 
 | Image | Architectures | Base | Compiler | CMake | Ninja |
 |-------|---------------|------|----------|-------|-------|
-| `ghcr.io/nata11/noisepqcpp-clang21-ubuntu26:1.0.0` | amd64, arm64 | Ubuntu 26.04 | Clang 21.1.8 | 4.3.5 | 1.13.2 |
-| `ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26:1.0.0` | amd64 only | Ubuntu 26.04 | GCC 15.2.0 | 4.3.5 | 1.13.2 |
+| `ghcr.io/nata11/noisepqcpp-clang21-ubuntu26:1.1.0` | amd64, arm64 | Ubuntu 26.04 | Clang 21.1.8 | 4.3.5 | 1.13.2 |
+| `ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26:1.1.0` | amd64 only | Ubuntu 26.04 | GCC 15.2.0 | 4.3.5 | 1.13.2 |
 
 **There is no arm64 GCC image.** `noisepqcpp-gcc15-ubuntu26` is published for amd64 only. On arm64 hosts (Apple Silicon, Raspberry Pi 5, ARM servers), use the Clang 21 image.
 
 Both images also include Git, Python 3 with analysis libraries (pandas, numpy, matplotlib, seaborn, scipy, JupyterLab), gdb, valgrind, and jq. Clang 21 and GCC 15.2 come from Ubuntu 26.04's own packages. CMake 4.3.5 is the pinned Kitware release.
 
-The Clang 21 `:1.0.0` tag is a multi-arch manifest, so Docker automatically selects the right architecture for your host. Architecture-specific tags are also published:
+The Clang 21 `:1.1.0` tag is a multi-arch manifest, so Docker automatically selects the right architecture for your host. Architecture-specific tags are also published:
 
-- `ghcr.io/nata11/noisepqcpp-clang21-ubuntu26:1.0.0-amd64`
-- `ghcr.io/nata11/noisepqcpp-clang21-ubuntu26:1.0.0-arm64`
-- `ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26:1.0.0-amd64`
+- `ghcr.io/nata11/noisepqcpp-clang21-ubuntu26:1.1.0-amd64`
+- `ghcr.io/nata11/noisepqcpp-clang21-ubuntu26:1.1.0-arm64`
+- `ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26:1.1.0-amd64`
 
 Pull the image for your compiler of choice:
 
 ```bash
 # Clang 21
-docker pull ghcr.io/nata11/noisepqcpp-clang21-ubuntu26:1.0.0
+docker pull ghcr.io/nata11/noisepqcpp-clang21-ubuntu26:1.1.0
 
 # GCC 15 (amd64 only)
-docker pull ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26:1.0.0
+docker pull ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26:1.1.0
 ```
 
 **Apple Silicon Macs**: The Clang 21 image runs natively as `linux/arm64`. The GCC 15 image is amd64-only, so it always runs under emulation. Force the platform explicitly:
 
 ```bash
 docker run --rm -it --platform linux/amd64 \
-  ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26:1.0.0
+  ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26:1.1.0
 ```
 
 Emulated builds will be slower than native arm64. If GNU `tar` inside an amd64 Ubuntu 26.04 container fails with `Cannot open: Function not implemented`, Docker Desktop is emulating amd64 with Rosetta. In that case, turn off **Use Rosetta for x86_64/amd64 emulation on Apple Silicon** in Docker Desktop's settings so it falls back to QEMU.
+
+**Minimum CPU.** The 1.1.0 toolchain files set an ISA baseline, so the default builds need an x86-64-v3 (AVX2-class) CPU on amd64 and a Cortex-A76-class CPU on arm64, inside or outside a container. For an older CPU, override the baseline at configure time with `-DNOISE_BOTAN_ARCH_FLAGS=<flags>`; see [ISA baseline, optimization and linking](BuildGuide.md#isa-baseline-optimization-and-linking) in the Build Guide. Docker Desktop's QEMU emulation on Apple Silicon runs these builds: in the GCC 15 image with Rosetta off, `ld.so` reports x86-64-v3 as supported, and a Release build of the whole project passed all 373 tests. Limit the parallelism there (`cmake --build build -j 4`): 15 parallel `-O3` LTO compiles ran out of memory in an 8 GB Docker VM.
 
 ### Getting the Source and Building
 
@@ -52,7 +54,7 @@ The images contain no NoisePQC++ source. There are two ways to get it into the c
 Start the container and clone the repository:
 
 ```bash
-docker run --rm -it ghcr.io/nata11/noisepqcpp-clang21-ubuntu26:1.0.0
+docker run --rm -it ghcr.io/nata11/noisepqcpp-clang21-ubuntu26:1.1.0
 ```
 
 Inside the container:
@@ -70,7 +72,7 @@ Clone the repository on your host machine, then mount it into the container:
 git clone https://github.com/nata11/NoisePQCpp.git
 
 docker run --rm -it -v "$(pwd)/NoisePQCpp":/workspace/NoisePQCpp \
-  ghcr.io/nata11/noisepqcpp-clang21-ubuntu26:1.0.0
+  ghcr.io/nata11/noisepqcpp-clang21-ubuntu26:1.1.0
 ```
 
 Inside the container:
@@ -99,7 +101,7 @@ Use the GCC 15 image instead (amd64 only):
 
 ```bash
 docker run --rm -it --platform linux/amd64 \
-  ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26:1.0.0
+  ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26:1.1.0
 ```
 
 Then configure with the GCC toolchain file:
@@ -114,6 +116,49 @@ cmake -B build -S . -G Ninja \
 cmake --build build -j$(nproc)
 
 ctest --test-dir build --output-on-failure
+```
+
+### Published Digests for Version 1.1.0
+
+For strict reproducibility, pull the 1.1.0 images by their **immutable SHA256 digest** instead of by tag. These digests were read from the live registry with `docker buildx imagetools inspect` after the push. Every tag is an OCI image index: the `:1.1.0` tags hold the platform images, and each architecture-specific tag holds its one platform image, so the tag's digest and the platform image's digest are listed together. Attestation manifests (`unknown/unknown`) are not listed.
+
+**Clang 21 image** (`ghcr.io/nata11/noisepqcpp-clang21-ubuntu26`):
+
+| Reference | SHA256 Digest |
+|-----------|---------------|
+| Multi-arch manifest (`:1.1.0`) | `sha256:524a5da6aede30014898634e0bedc46d9e186693e8864ef44af6f7ead94f0cac` |
+| `:1.1.0-amd64` tag (index) | `sha256:e04abb00744096ba336fed2b61fe2d232f6eb6b82434babab0f25d302a53ccf0` |
+| `linux/amd64` | `sha256:b04a4205280c2b5adbd60ae555ff9acaa672f8820ede5980138b42a60c64d822` |
+| `:1.1.0-arm64` tag (index) | `sha256:36f545d9c2a82a315711ac058d652cdac11465f384b689b6e7448fcbbd134469` |
+| `linux/arm64` | `sha256:e5625ccb4cf22126268af295295a80434c636507a53da8467bc11abfafddfb07` |
+
+**GCC 15 image** (`ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26`, amd64 only):
+
+| Reference | SHA256 Digest |
+|-----------|---------------|
+| Manifest list (`:1.1.0`, the same index as the `:1.1.0-amd64` tag) | `sha256:3445e4bc5ee802e56d224e902c9cabeefd8b4ba0c1f2b378da51510ad6242ffc` |
+| `linux/amd64` | `sha256:ebe1566d17888e061222fca874da2beb18eb87c5d861bf6c49a5482ee8bc36d4` |
+
+#### Pulling 1.1.0 Images by Digest
+
+Pull the manifest list and let Docker select your architecture:
+
+```bash
+docker pull ghcr.io/nata11/noisepqcpp-clang21-ubuntu26@sha256:524a5da6aede30014898634e0bedc46d9e186693e8864ef44af6f7ead94f0cac
+docker pull ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26@sha256:3445e4bc5ee802e56d224e902c9cabeefd8b4ba0c1f2b378da51510ad6242ffc
+```
+
+Or pin to a specific architecture with the per-platform digest:
+
+```bash
+# Clang 21, linux/amd64
+docker pull ghcr.io/nata11/noisepqcpp-clang21-ubuntu26@sha256:b04a4205280c2b5adbd60ae555ff9acaa672f8820ede5980138b42a60c64d822
+
+# Clang 21, linux/arm64
+docker pull ghcr.io/nata11/noisepqcpp-clang21-ubuntu26@sha256:e5625ccb4cf22126268af295295a80434c636507a53da8467bc11abfafddfb07
+
+# GCC 15, linux/amd64
+docker pull ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26@sha256:ebe1566d17888e061222fca874da2beb18eb87c5d861bf6c49a5482ee8bc36d4
 ```
 
 ### Published Digests for Version 1.0.0
@@ -162,22 +207,24 @@ docker pull ghcr.io/nata11/noisepqcpp-gcc15-ubuntu26@sha256:30fe52faf002d2f38248
 After a successful Release build with `-DNOISEPQC_BUILD_BENCHMARKS=ON`, run the handshake benchmark:
 
 ```bash
-./bin/benchmarks/bench_handshake
+./build/bin/benchmarks/bench_handshake
 ```
+
+For a full run that also records the system and build details, use `scripts/run_benchmarks.sh`; see the [Benchmarking Guide](BenchmarkingGuide.md).
 
 To save the results for later analysis:
 
 ```bash
-mkdir -p benchmark-results
+mkdir -p out/benchmark-results
 
 # JSON output (for programmatic analysis)
-./bin/benchmarks/bench_handshake \
-  --benchmark_out=benchmark-results/handshake_results.json \
+./build/bin/benchmarks/bench_handshake \
+  --benchmark_out=out/benchmark-results/handshake_results.json \
   --benchmark_out_format=json
 
 # Text output
-./bin/benchmarks/bench_handshake \
-  | tee benchmark-results/handshake_results.txt
+./build/bin/benchmarks/bench_handshake \
+  | tee out/benchmark-results/handshake_results.txt
 ```
 
 **Note**: Use `NOISE_DEBUG_BUILD=OFF` (as shown in the build commands above) for accurate benchmark results. Debug logging adds overhead that skews measurements.
@@ -186,7 +233,7 @@ mkdir -p benchmark-results
 
 These are the images used for the NoisePQC++ 0.9.0 release and its paper. They are kept unchanged so that their published digests remain reproducible.
 
-> **Important: use these images with the `v0.9.0` source tag, not current `main`.** The build instructions below use `cmake/clang18-linux-toolchain.cmake`, which was removed from the repository in commit `f591e07`. Current `main` targets Clang 21 and CMake 4.3, which these images do not provide. Check out the release tag after cloning:
+> **Important: use these images with the `v0.9.0` source tag, not current `main`.** The build instructions below use `cmake/clang18-linux-toolchain.cmake`, which was removed from the repository after 0.9.0. Current `main` targets Clang 21 and CMake 4.3, which these images do not provide. Check out the release tag after cloning:
 >
 > ```bash
 > git clone https://github.com/nata11/NoisePQCpp.git

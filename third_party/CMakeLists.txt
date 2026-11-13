@@ -12,14 +12,15 @@ add_subdirectory(botan)
 # Catch2 Testing Framework
 # ================================
 # Downloaded via FetchContent and built with project's toolchain
-# to ensure ABI compatibility (Clang 18 + libc++)
+# to ensure ABI compatibility (the project's toolchain: Clang 21 with libc++,
+# GCC 15 with libstdc++, or MSVC)
 
 include(FetchContent)
 
 FetchContent_Declare(
   Catch2
   GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-  GIT_TAG        v3.11.0
+  GIT_TAG        v3.16.1
   GIT_SHALLOW    TRUE
   GIT_PROGRESS   TRUE
 )
@@ -31,7 +32,7 @@ set(BUILD_TESTING OFF CACHE BOOL "Build Catch2 tests" FORCE)
 set(CATCH_BUILD_TESTING OFF CACHE BOOL "Build Catch2 SelfTest project" FORCE)
 
 # Download and make Catch2 available
-# This builds Catch2 with your active toolchain (Clang 18 + libc++)
+# This builds Catch2 with the project's toolchain (Clang 21 with libc++, GCC 15 with libstdc++, or MSVC)
 # FetchContent_MakeAvailable only downloads once per cache, stored in .cmake-cache/
 FetchContent_MakeAvailable(Catch2)
 
@@ -45,7 +46,7 @@ set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH}" PARENT_SCOPE)
 FetchContent_Declare(
         asio
         GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
-        GIT_TAG asio-1-36-0
+        GIT_TAG asio-1-39-0
         GIT_SHALLOW    TRUE
         GIT_PROGRESS   TRUE
 )
@@ -53,11 +54,11 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(asio)
 
 # Define ASIO include directory
-set(ASIO_INCLUDE_DIRS ${asio_SOURCE_DIR}/asio/include)
+set(ASIO_INCLUDE_DIRS ${asio_SOURCE_DIR}/include)
 
 # Create ASIO static library
 # This compiles ASIO once and links to both executables
-add_library(asio_static STATIC ${asio_SOURCE_DIR}/asio/src/asio.cpp)
+add_library(asio_static STATIC ${asio_SOURCE_DIR}/src/asio.cpp)
 target_include_directories(asio_static PUBLIC ${ASIO_INCLUDE_DIRS})
 target_compile_definitions(asio_static PUBLIC ASIO_STANDALONE)
 target_compile_definitions(asio_static PRIVATE ASIO_SEPARATE_COMPILATION)
@@ -73,9 +74,12 @@ if(NOISEPQC_BUILD_BENCHMARKS)
         FetchContent_Declare(
             benchmark
             GIT_REPOSITORY https://github.com/google/benchmark.git
-            GIT_TAG        v1.9.1
+            GIT_TAG        v1.10.0
             GIT_SHALLOW    TRUE
             GIT_PROGRESS   TRUE
+            # Keep the library out of "all": it is built only when a bench
+            # target needs it, so configs that skip benchmarks skip it too
+            EXCLUDE_FROM_ALL
         )
 
         # Configure Google Benchmark options

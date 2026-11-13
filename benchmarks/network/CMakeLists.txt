@@ -21,3 +21,8 @@ target_link_libraries(bench_client PRIVATE NoisePQC::noisepqc asio_static)
 # Network Benchmark: Multi-client stress test
 add_executable(bench_stress bench_stress.cpp)
 target_link_libraries(bench_stress PRIVATE NoisePQC::noisepqc asio_static)
+
+# Link-time optimization in Release configs (cmake/BuildConfig.cmake)
+foreach(TARGET_NAME bench_server bench_client bench_stress)
+    noisepqc_optimize_target(${TARGET_NAME})
+endforeach()

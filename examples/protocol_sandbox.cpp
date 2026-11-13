@@ -97,8 +97,8 @@ int main() {
     print_separator("Test 1b: Constructor with Individual Parameters - ML-KEM");
 
     try {
-        std::println("Creating Protocol with XX pattern, M512, ChaChaPoly, SHA256");
-        Protocol proto_mlkem1(XX, M512, ChaChaPoly, SHA256);
+        std::println("Creating Protocol with pqXX pattern, M512, ChaChaPoly, SHA256");
+        Protocol proto_mlkem1(pqXX, M512, ChaChaPoly, SHA256);
         print_protocol_info(proto_mlkem1);
         std::println("✓ SUCCESS\n");
     }
@@ -107,8 +107,8 @@ int main() {
     }
 
     try {
-        std::println("Creating Protocol with IK pattern, M768, AESGCM, SHA512");
-        Protocol proto_mlkem2(IK, M768, AESGCM, SHA512);
+        std::println("Creating Protocol with pqIK pattern, M768, AESGCM, SHA512");
+        Protocol proto_mlkem2(pqIK, M768, AESGCM, SHA512);
         print_protocol_info(proto_mlkem2);
         std::println("✓ SUCCESS\n");
     }
@@ -117,8 +117,8 @@ int main() {
     }
 
     try {
-        std::println("Creating Protocol with XN pattern, M1024, ChaChaPoly, BLAKE2b");
-        Protocol proto_mlkem3(XN, M1024, ChaChaPoly, BLAKE2b);
+        std::println("Creating Protocol with pqXN pattern, M1024, ChaChaPoly, BLAKE2b");
+        Protocol proto_mlkem3(pqXN, M1024, ChaChaPoly, BLAKE2b);
         print_protocol_info(proto_mlkem3);
         std::println("✓ SUCCESS\n");
     }
@@ -173,8 +173,8 @@ int main() {
 
     // ML-KEM variants
     try {
-        std::println("Creating Protocol from string: \"Noise_XX_M512_ChaChaPoly_SHA256\"");
-        Protocol proto_m512("Noise_XX_M512_ChaChaPoly_SHA256");
+        std::println("Creating Protocol from string: \"Noise_pqXX_M512_ChaChaPoly_SHA256\"");
+        Protocol proto_m512("Noise_pqXX_M512_ChaChaPoly_SHA256");
         print_protocol_info(proto_m512);
         std::println("✓ SUCCESS\n");
     }
@@ -183,8 +183,8 @@ int main() {
     }
 
     try {
-        std::println("Creating Protocol from string: \"Noise_IK_M768_AESGCM_SHA512\"");
-        Protocol proto_m768("Noise_IK_M768_AESGCM_SHA512");
+        std::println("Creating Protocol from string: \"Noise_pqIK_M768_AESGCM_SHA512\"");
+        Protocol proto_m768("Noise_pqIK_M768_AESGCM_SHA512");
         print_protocol_info(proto_m768);
         std::println("✓ SUCCESS\n");
     }
@@ -193,8 +193,8 @@ int main() {
     }
 
     try {
-        std::println("Creating Protocol from string: \"Noise_XN_M1024_ChaChaPoly_BLAKE2b\"");
-        Protocol proto_m1024("Noise_XN_M1024_ChaChaPoly_BLAKE2b");
+        std::println("Creating Protocol from string: \"Noise_pqXN_M1024_ChaChaPoly_BLAKE2b\"");
+        Protocol proto_m1024("Noise_pqXN_M1024_ChaChaPoly_BLAKE2b");
         print_protocol_info(proto_m1024);
         std::println("✓ SUCCESS\n");
     }
@@ -203,12 +203,12 @@ int main() {
     }
 
     // =======================================================================
-    // Test 3: new_protocol static method
+    // Test 3: Brace initialization from a protocol string
     // =======================================================================
-    print_separator("Test 3: new_protocol Static Method");
+    print_separator("Test 3: Brace Initialization from a Protocol String");
 
     try {
-        std::println("Creating Protocol using new_protocol: \"Noise_XX_25519_ChaChaPoly_SHA256\"");
+        std::println("Creating Protocol with brace initialization: \"Noise_XX_25519_ChaChaPoly_SHA256\"");
         Protocol proto9 = Protocol{"Noise_XX_25519_ChaChaPoly_SHA256"};
         print_protocol_info(proto9);
         std::println("✓ SUCCESS\n");
@@ -218,7 +218,7 @@ int main() {
     }
 
     try {
-        std::println("Creating Protocol using new_protocol: \"Noise_NN_448_AESGCM_SHA512\"");
+        std::println("Creating Protocol with brace initialization: \"Noise_NN_448_AESGCM_SHA512\"");
         Protocol proto10 = Protocol{"Noise_NN_448_AESGCM_SHA512"};
         print_protocol_info(proto10);
         std::println("✓ SUCCESS\n");
@@ -228,7 +228,7 @@ int main() {
     }
 
     try {
-        std::println("Creating Protocol using new_protocol: \"Noise_KK_25519_ChaChaPoly_BLAKE2b\"");
+        std::println("Creating Protocol with brace initialization: \"Noise_KK_25519_ChaChaPoly_BLAKE2b\"");
         Protocol proto11 = Protocol{"Noise_KK_25519_ChaChaPoly_BLAKE2b"};
         print_protocol_info(proto11);
         std::println("✓ SUCCESS\n");
@@ -238,7 +238,7 @@ int main() {
     }
 
     try {
-        std::println("Creating Protocol using new_protocol: \"Noise_NK_448_AESGCM_BLAKE2s\"");
+        std::println("Creating Protocol with brace initialization: \"Noise_NK_448_AESGCM_BLAKE2s\"");
         Protocol proto12 = Protocol{"Noise_NK_448_AESGCM_BLAKE2s"};
         print_protocol_info(proto12);
         std::println("✓ SUCCESS\n");
@@ -295,7 +295,7 @@ int main() {
     // ML-KEM round-trip tests
     try {
         std::println("Testing ML-KEM round-trip: M512");
-        std::string_view original_m512 = "Noise_XX_M512_ChaChaPoly_SHA256";
+        std::string_view original_m512 = "Noise_pqXX_M512_ChaChaPoly_SHA256";
         Protocol proto_m512(original_m512);
         std::string result_m512 = proto_m512.String();
 
@@ -315,7 +315,7 @@ int main() {
 
     try {
         std::println("Testing ML-KEM round-trip: M768");
-        std::string_view original_m768 = "Noise_IK_M768_AESGCM_SHA512";
+        std::string_view original_m768 = "Noise_pqIK_M768_AESGCM_SHA512";
         Protocol proto_m768(original_m768);
         std::string result_m768 = proto_m768.String();
 
@@ -335,7 +335,7 @@ int main() {
 
     try {
         std::println("Testing ML-KEM round-trip: M1024");
-        std::string_view original_m1024 = "Noise_XN_M1024_ChaChaPoly_BLAKE2b";
+        std::string_view original_m1024 = "Noise_pqXN_M1024_ChaChaPoly_BLAKE2b";
         Protocol proto_m1024(original_m1024);
         std::string result_m1024 = proto_m1024.String();
 
@@ -385,9 +385,9 @@ int main() {
     std::vector<std::string_view> test_dh = {
         "Noise_XX_25519_ChaChaPoly_SHA256",
         "Noise_XX_448_ChaChaPoly_SHA256",
-        "Noise_XX_M512_ChaChaPoly_SHA256",
-        "Noise_XX_M768_ChaChaPoly_SHA256",
-        "Noise_XX_M1024_ChaChaPoly_SHA256"
+        "Noise_pqXX_M512_ChaChaPoly_SHA256",
+        "Noise_pqXX_M768_ChaChaPoly_SHA256",
+        "Noise_pqXX_M1024_ChaChaPoly_SHA256"
     };
 
     for (const auto& dh_str : test_dh) {
@@ -534,12 +534,12 @@ int main() {
         {"NK", "25519", "AESGCM", "BLAKE2b"},
         {"NK", "448", "ChaChaPoly", "BLAKE2s"},
         // ML-KEM combinations
-        {"XX", "M512", "ChaChaPoly", "SHA256"},
-        {"IK", "M768", "AESGCM", "SHA512"},
-        {"XN", "M1024", "ChaChaPoly", "BLAKE2b"},
-        {"NN", "M512", "AESGCM", "BLAKE2s"},
-        {"KK", "M768", "ChaChaPoly", "SHA256"},
-        {"NK", "M1024", "AESGCM", "SHA512"}
+        {"pqXX", "M512", "ChaChaPoly", "SHA256"},
+        {"pqIK", "M768", "AESGCM", "SHA512"},
+        {"pqXN", "M1024", "ChaChaPoly", "BLAKE2b"},
+        {"pqNN", "M512", "AESGCM", "BLAKE2s"},
+        {"pqKK", "M768", "ChaChaPoly", "SHA256"},
+        {"pqNK", "M1024", "AESGCM", "SHA512"}
     };
 
     int success_count = 0;
@@ -579,9 +579,9 @@ int main() {
     // Sub-test 12a: Access protocol.dh member for ML-KEM protocols
     std::println("12a: Accessing protocol.dh member for ML-KEM protocols");
     try {
-        Protocol proto_m512(XX, M512, ChaChaPoly, SHA256);
-        Protocol proto_m768(IK, M768, AESGCM, SHA512);
-        Protocol proto_m1024(XN, M1024, ChaChaPoly, BLAKE2b);
+        Protocol proto_m512(pqXX, M512, ChaChaPoly, SHA256);
+        Protocol proto_m768(pqIK, M768, AESGCM, SHA512);
+        Protocol proto_m1024(pqXN, M1024, ChaChaPoly, BLAKE2b);
 
         std::println("  M512 DH algorithm: {}", proto_m512.dh.String());
         std::println("  M768 DH algorithm: {}", proto_m768.dh.String());

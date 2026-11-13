@@ -19,11 +19,12 @@
 //
 
 //
-// SymmetricState Module Tests using Catch2 v3.11
+// SymmetricState Module Tests using Catch2 v3
 //
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_session.hpp>
+#include "botan_all.h"
 
 import noise;
 
@@ -66,7 +67,7 @@ TEST_CASE("SymmetricState - Copy Constructor", "[symmetricstate][constructor][co
 
     SymmetricState ss1(cipher, hash);
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss1.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss1.InitializeSymmetric(protocol_name);
 
     SymmetricState ss2(ss1);
 
@@ -81,7 +82,7 @@ TEST_CASE("SymmetricState - Move Constructor", "[symmetricstate][constructor][mo
 
     SymmetricState ss1(cipher, hash);
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss1.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss1.InitializeSymmetric(protocol_name);
 
     auto old_h = ss1.h;
     SymmetricState ss2(std::move(ss1));
@@ -97,7 +98,7 @@ TEST_CASE("SymmetricState - InitializeSymmetric with short protocol name", "[sym
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     SECTION("Hash h is initialized") {
         REQUIRE(ss.h.size() == 32);
@@ -131,7 +132,7 @@ TEST_CASE("SymmetricState - InitializeSymmetric with long protocol name", "[symm
 
     // Create a protocol name longer than hash length (32 bytes)
     std::string protocol_name = "Noise_XX_25519_AESGCM_SHA256_VeryLongProtocolNameThatExceedsHashLength";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     SECTION("Hash h is initialized to hash output length") {
         REQUIRE(ss.h.size() == 32);
@@ -155,7 +156,7 @@ TEST_CASE("SymmetricState - MixKey", "[symmetricstate][mixkey]") {
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     auto old_ck = ss.ck;
 
@@ -189,7 +190,7 @@ TEST_CASE("SymmetricState - MixHash", "[symmetricstate][mixhash]") {
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     auto old_h = ss.h;
 
@@ -227,7 +228,7 @@ TEST_CASE("SymmetricState - MixKeyAndHash", "[symmetricstate][mixkeyandhash]") {
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     auto old_ck = ss.ck;
     auto old_h = ss.h;
@@ -256,7 +257,7 @@ TEST_CASE("SymmetricState - EncryptAndHash", "[symmetricstate][encrypt]") {
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     // Set up encryption key
     std::vector<std::uint8_t> input_km(32, 0xDD);
@@ -292,8 +293,8 @@ TEST_CASE("SymmetricState - DecryptAndHash", "[symmetricstate][decrypt]") {
     SymmetricState ss_receiver(cipher, hash);
 
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss_sender.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
-    ss_receiver.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss_sender.InitializeSymmetric(protocol_name);
+    ss_receiver.InitializeSymmetric(protocol_name);
 
     // Set up same encryption key on both sides
     std::vector<std::uint8_t> input_km(32, 0xEE);
@@ -323,7 +324,7 @@ TEST_CASE("SymmetricState - EncryptAndHash without key", "[symmetricstate][encry
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     // Don't set a key - CipherState should return plaintext unchanged
     std::vector<std::uint8_t> plaintext = {0x01, 0x02, 0x03};
@@ -347,7 +348,7 @@ TEST_CASE("SymmetricState - GetHandshakeHash", "[symmetricstate][hash]") {
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     auto handshake_hash = ss.GetHandshakeHash();
 
@@ -375,7 +376,7 @@ TEST_CASE("SymmetricState - Split", "[symmetricstate][split]") {
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     // Set up some key material
     std::vector<std::uint8_t> input_km(32, 0xFF);
@@ -426,7 +427,7 @@ TEST_CASE("SymmetricState - Split with SHA-512", "[symmetricstate][split][sha512
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA512";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     std::vector<std::uint8_t> input_km(32, 0xAB);
     ss.MixKey(input_km);
@@ -453,8 +454,8 @@ TEST_CASE("SymmetricState - Complete handshake simulation", "[symmetricstate][in
     SymmetricState ss_resp(cipher, hash);
 
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss_init.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
-    ss_resp.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss_init.InitializeSymmetric(protocol_name);
+    ss_resp.InitializeSymmetric(protocol_name);
 
     SECTION("Initial states are identical") {
         REQUIRE(ss_init.h == ss_resp.h);
@@ -503,7 +504,7 @@ TEST_CASE("SymmetricState - Empty protocol name", "[symmetricstate][edge-case]")
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     SECTION("Hash is initialized to all zeros") {
         bool all_zeros = std::ranges::all_of(ss.h, [](auto b) { return b == 0; });
@@ -522,7 +523,7 @@ TEST_CASE("SymmetricState - Multiple MixHash calls accumulate", "[symmetricstate
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     std::vector<std::uint8_t> data1 = {0x01};
     std::vector<std::uint8_t> data2 = {0x02};
@@ -551,7 +552,7 @@ TEST_CASE("SymmetricState - Large data handling", "[symmetricstate][edge-case]")
     SymmetricState ss(cipher, hash);
 
     std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-    ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+    ss.InitializeSymmetric(protocol_name);
 
     // Large input for MixKey
     std::vector<std::uint8_t> large_input(1024, 0x42);
@@ -567,7 +568,7 @@ TEST_CASE("SymmetricState - Works with different cipher algorithms", "[symmetric
         SymmetricState ss(cipher, hash);
 
         std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
-        ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+        ss.InitializeSymmetric(protocol_name);
 
         REQUIRE(ss.h.size() == 32);
         REQUIRE(ss.ck.size() == 32);
@@ -579,7 +580,7 @@ TEST_CASE("SymmetricState - Works with different cipher algorithms", "[symmetric
         SymmetricState ss(cipher, hash);
 
         std::string protocol_name = "Noise_XX_25519_AESGCM_SHA256";
-        ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+        ss.InitializeSymmetric(protocol_name);
 
         REQUIRE(ss.h.size() == 32);
         REQUIRE(ss.ck.size() == 32);
@@ -594,7 +595,7 @@ TEST_CASE("SymmetricState - Works with different hash algorithms", "[symmetricst
         SymmetricState ss(cipher, hash);
 
         std::string protocol_name = "Noise";
-        ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+        ss.InitializeSymmetric(protocol_name);
 
         REQUIRE(ss.hashLen == 32);
         REQUIRE(ss.h.size() == 32);
@@ -605,7 +606,7 @@ TEST_CASE("SymmetricState - Works with different hash algorithms", "[symmetricst
         SymmetricState ss(cipher, hash);
 
         std::string protocol_name = "Noise";
-        ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+        ss.InitializeSymmetric(protocol_name);
 
         REQUIRE(ss.hashLen == 64);
         REQUIRE(ss.h.size() == 64);
@@ -616,7 +617,7 @@ TEST_CASE("SymmetricState - Works with different hash algorithms", "[symmetricst
         SymmetricState ss(cipher, hash);
 
         std::string protocol_name = "Noise";
-        ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+        ss.InitializeSymmetric(protocol_name);
 
         REQUIRE(ss.hashLen == 64);
         REQUIRE(ss.h.size() == 64);
@@ -627,10 +628,134 @@ TEST_CASE("SymmetricState - Works with different hash algorithms", "[symmetricst
         SymmetricState ss(cipher, hash);
 
         std::string protocol_name = "Noise";
-        ss.InitializeSymmetric(std::span(reinterpret_cast<const std::uint8_t*>(protocol_name.data()), protocol_name.size()));
+        ss.InitializeSymmetric(protocol_name);
 
         REQUIRE(ss.hashLen == 32);
         REQUIRE(ss.h.size() == 32);
+    }
+}
+
+TEST_CASE("SymmetricState - HKDF matches RFC 5869 for every hash", "[symmetricstate][hkdf]") {
+    // Guard for the HKDF path: Noise spec Section 4.3's HKDF (ck as the salt, empty info) must equal
+    // RFC 5869 as Botan computes it, for MixKey (2 outputs), MixKeyAndHash (3) and Split (2).
+    // test_vectors pins the handshake bytes.
+    for (const auto name : {SHA256, SHA512, BLAKE2b, BLAKE2s}) {
+        INFO(name);
+        const Cipher cipher{ChaChaPoly};
+        const Hash hash{name};
+        const std::size_t hashLen = hash.hash_function->output_length();
+        const auto kdf = Botan::KDF::create_or_throw("HKDF(" + hash.hash_function->name() + ")");
+        const auto hkdf = [&](const std::span<const std::uint8_t> salt, const std::span<const std::uint8_t> ikm,
+                              const std::size_t outputs) {
+            return kdf->derive_key<std::vector<std::uint8_t>>(outputs * hashLen, ikm, salt,
+                                                               std::span<const std::uint8_t>{});
+        };
+        const auto segment = [&](const std::vector<std::uint8_t>& out, const std::size_t i) {
+            return std::span<const std::uint8_t>{out}.subspan(i * hashLen, hashLen);
+        };
+
+        std::vector<std::uint8_t> salt(hashLen);
+        for (std::size_t i = 0; i < hashLen; ++i) salt[i] = static_cast<std::uint8_t>(0x40 + i);
+        std::vector<std::uint8_t> ikm(32);
+        for (std::size_t i = 0; i < ikm.size(); ++i) ikm[i] = static_cast<std::uint8_t>(0xC0 ^ (i * 3));
+        std::vector<std::uint8_t> hBefore(hashLen);
+        for (std::size_t i = 0; i < hashLen; ++i) hBefore[i] = static_cast<std::uint8_t>(0x11 + i);
+
+        // MixKey: (ck, temp_k) = HKDF(ck, ikm, 2)
+        {
+            SymmetricState ss{cipher, hash};
+            ss.ck = salt;
+            ss.MixKey(ikm);
+            const auto out = hkdf(salt, ikm, 2);
+            CHECK(std::ranges::equal(ss.ck, segment(out, 0)));
+            CHECK(std::ranges::equal(ss.cs.key, segment(out, 1).first(SYMMETRIC_KEY_SIZE)));
+        }
+
+        // MixKeyAndHash: (ck, temp_h, temp_k) = HKDF(ck, ikm, 3); h = HASH(h || temp_h)
+        {
+            SymmetricState ss{cipher, hash};
+            ss.ck = salt;
+            ss.h = hBefore;
+            ss.MixKeyAndHash(ikm);
+            const auto out = hkdf(salt, ikm, 3);
+            CHECK(std::ranges::equal(ss.ck, segment(out, 0)));
+            CHECK(std::ranges::equal(ss.cs.key, segment(out, 2).first(SYMMETRIC_KEY_SIZE)));
+            const auto hashFn = hash.hash_function->new_object();
+            hashFn->update(hBefore);
+            hashFn->update(segment(out, 1));
+            CHECK(ss.h == hashFn->final_stdvec());
+        }
+
+        // Split: (k1, k2) = HKDF(ck, empty, 2)
+        {
+            SymmetricState ss{cipher, hash};
+            ss.ck = salt;
+            ss.h = hBefore;
+            const auto [c1, c2] = ss.Split();
+            const auto out = hkdf(salt, {}, 2);
+            CHECK(std::ranges::equal(c1.key, segment(out, 0).first(SYMMETRIC_KEY_SIZE)));
+            CHECK(std::ranges::equal(c2.key, segment(out, 1).first(SYMMETRIC_KEY_SIZE)));
+        }
+    }
+}
+
+TEST_CASE("SymmetricState - copying a moved-from state throws NoiseError", "[symmetricstate][constructor][move][error]") {
+    Cipher cipher(ChaChaPoly);
+    Hash hash(SHA256);
+
+    SymmetricState ss1(cipher, hash);
+    const std::string protocol_name = "Noise_XX_25519_ChaChaPoly_SHA256";
+    ss1.InitializeSymmetric(protocol_name);
+    const auto h_before = ss1.h;
+    const auto ck_before = ss1.ck;
+
+    SymmetricState ss2(std::move(ss1));
+
+    // A moved-from SymmetricState may only be destroyed. Copying it throws
+    // NoiseError instead of dereferencing its (now null) hash and HMAC objects.
+    REQUIRE_THROWS_AS(SymmetricState{ss1}, NoiseError);
+
+    // The move destination is unaffected: it still mixes, and a copy of it works.
+    REQUIRE(ss2.h == h_before);
+    REQUIRE(ss2.ck == ck_before);
+    const std::vector<std::uint8_t> data{0x01, 0x02, 0x03};
+    ss2.MixHash(data);
+    REQUIRE(ss2.h != h_before);
+
+    SymmetricState ss3(ss2);
+    REQUIRE(ss3.h == ss2.h);
+    REQUIRE(ss3.ck == ss2.ck);
+    ss2.MixHash(data);
+    ss3.MixHash(data);
+    REQUIRE(ss3.h == ss2.h);
+}
+
+TEST_CASE("SymmetricState - InitializeSymmetric at the HASHLEN boundary", "[symmetricstate][initialize][boundary]") {
+    // Guard: pins the Noise spec Section 5.2 split that InitializeSymmetric implements. A name
+    // of exactly HASHLEN bytes is copied into h unchanged (no padding, no hash); one byte more is
+    // hashed, with the digest computed independently through a separate Hash object.
+    const Cipher cipher(ChaChaPoly);
+    for (const auto hashName : {SHA256, BLAKE2b}) {
+        const Hash hash(hashName);
+        const std::size_t hashLen = hash.hash_function->output_length();
+        INFO("hash " << hashName << " (HASHLEN " << hashLen << ")");
+        const std::string exact(hashLen, 'N');
+        const std::string longer(hashLen + 1, 'N');
+
+        SymmetricState ss(cipher, hash);
+        ss.InitializeSymmetric(exact);
+        const std::vector<std::uint8_t> exactBytes(exact.begin(), exact.end());
+        REQUIRE(ss.h.size() == hashLen);
+        REQUIRE(ss.h == exactBytes);
+        REQUIRE(ss.ck == ss.h);
+
+        SymmetricState ssLong(cipher, hash);
+        ssLong.InitializeSymmetric(longer);
+        const auto digest = Hash(hashName).hash_function->process(longer);
+        REQUIRE(ssLong.h.size() == hashLen);
+        REQUIRE(std::ranges::equal(ssLong.h, digest));
+        REQUIRE(ssLong.ck == ssLong.h);
+        REQUIRE(ssLong.h != ss.h);
     }
 }
 

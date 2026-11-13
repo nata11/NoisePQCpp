@@ -19,7 +19,7 @@
 //
 
 //
-// Protocol Module Tests using Catch2 v3.11
+// Protocol Module Tests using Catch2 v3
 //
 
 #include <catch2/catch_test_macros.hpp>
@@ -408,6 +408,138 @@ TEST_CASE("Protocol - HFS deferred patterns", "[protocol][hfs][deferred]") {
         Protocol proto(pattern);
         REQUIRE(proto.IsHFS());
         REQUIRE(proto.kem.has_value());
+    }
+}
+
+// ============================================================================
+// Algorithm and pattern allowlists
+// ============================================================================
+
+TEST_CASE("Protocol - Non-Noise cipher names are rejected", "[protocol][error][allowlist][cipher]") {
+    // Only the Noise names ChaChaPoly and AESGCM are accepted; nothing reaches Botan's
+    // name parser (fuzzing found std::out_of_range from "ChaChaPoly/)").
+    for (const std::string_view cipher : {"ChaChaPoly/)", "AES-256/GCM(8)", "AES-128/GCM",
+                                          "ChaCha20Poly1305", ""}) {
+        const std::string name = std::string("Noise_NN_25519_") + std::string(cipher) + "_SHA256";
+        INFO("protocol: " << name);
+        REQUIRE_THROWS_AS(Protocol{name}, ProtocolNotSupportedError);
+    }
+}
+
+TEST_CASE("Protocol - Non-Noise hash names are rejected", "[protocol][error][allowlist][hash]") {
+    for (const std::string_view hash : {"MD5", "SHA-3(256)", "SHA-256", "BLAKE2b(256)"}) {
+        const std::string name = std::string("Noise_NN_25519_ChaChaPoly_") + std::string(hash);
+        INFO("protocol: " << name);
+        REQUIRE_THROWS_AS(Protocol{name}, ProtocolNotSupportedError);
+    }
+}
+
+TEST_CASE("Protocol - Only registered HFS patterns parse", "[protocol][hfs][allowlist]") {
+    SECTION("hfs names that are not in the registry are rejected") {
+        // N has no ee (nothing to attach ekem1 to); NNpsk0 and pqXX are not HFS bases
+        for (const std::string_view name : {"Noise_Nhfs_25519+M768_ChaChaPoly_SHA256",
+                                            "Noise_NNpsk0hfs_25519+M768_ChaChaPoly_SHA256",
+                                            "Noise_pqXXhfs_M768+M768_ChaChaPoly_SHA256"}) {
+            INFO("protocol: " << name);
+            REQUIRE_THROWS_AS(Protocol{name}, ProtocolNotSupportedError);
+        }
+    }
+
+    SECTION("every registered hfs pattern parses and round-trips") {
+        std::size_t count = 0;
+        for (const auto& [patternName, pattern] : GetPatternRegistry()) {
+            if (!patternName.ends_with("hfs")) continue;
+            const std::string name = "Noise_" + patternName + "_25519+M768_ChaChaPoly_SHA256";
+            INFO("protocol: " << name);
+            const Protocol protocol{name};
+            REQUIRE(protocol.IsHFS());
+            REQUIRE(protocol.String() == name);
+            ++count;
+        }
+        REQUIRE(count == 35);
+    }
+}
+
+TEST_CASE("Protocol - Incompatible pattern and algorithms are rejected", "[protocol][error][allowlist][combination]") {
+    SECTION("DH tokens with a KEM algorithm") {
+        REQUIRE_THROWS_AS(Protocol{"Noise_XX_M768_ChaChaPoly_SHA256"}, ProtocolNotSupportedError);
+    }
+    SECTION("KEM tokens with a DH algorithm") {
+        REQUIRE_THROWS_AS(Protocol{"Noise_pqXX_25519_ChaChaPoly_SHA256"}, ProtocolNotSupportedError);
+    }
+    SECTION("HFS secondary algorithm is not a KEM") {
+        REQUIRE_THROWS_AS(Protocol{"Noise_XXhfs_25519+448_ChaChaPoly_SHA256"}, ProtocolNotSupportedError);
+    }
+    SECTION("HFS primary algorithm is not a DH") {
+        REQUIRE_THROWS_AS(Protocol{"Noise_XXhfs_M768+M768_ChaChaPoly_SHA256"}, ProtocolNotSupportedError);
+    }
+    SECTION("A kem without e1 in the pattern (component constructor)") {
+        REQUIRE_THROWS_AS(Protocol(XX, X25519, M768, ChaChaPoly, SHA256), ProtocolNotSupportedError);
+    }
+}
+
+// Malformed DH+KEM forms are ProtocolNotSupportedError, and
+// String() is the cached canonical name.
+TEST_CASE("Protocol - malformed DH+KEM forms are ProtocolNotSupportedError", "[protocol][error][hfs][string]") {
+    SECTION("a '+' without the hfs modifier, and hfs without a '+'") {
+        // Before 1.1.0, both threw a plain NoiseError.
+        REQUIRE_THROWS_AS(Protocol("Noise_XX_25519+M768_ChaChaPoly_SHA256"), ProtocolNotSupportedError);
+        REQUIRE_THROWS_AS(Protocol("Noise_XXhfs_25519_ChaChaPoly_SHA256"), ProtocolNotSupportedError);
+    }
+
+    SECTION("String() returns the parsed name for every registry pattern, from a cached string") {
+        // 25519_ChaChaPoly_SHA256 for the classical patterns, M768 for the KEM-only (pq) patterns
+        // and 25519+M768 for the hfs patterns, so that every name is a valid combination.
+        std::size_t checked = 0;
+        for (const auto& [name, pattern] : GetPatternRegistry()) {
+            INFO("pattern " << name);
+            std::string algos = "25519";
+            if (name.starts_with("pq")) {
+                algos = "M768";
+            }
+            else if (name.ends_with("hfs")) {
+                algos = "25519+M768";
+            }
+            const std::string full = "Noise_" + name + "_" + algos + "_ChaChaPoly_SHA256";
+            const Protocol p(full);
+            CHECK(p.String() == full);
+            CHECK(&p.String() == &p.String());   // one cached string, no rebuild per call
+            const std::string copy = p.String();  // the existing call form keeps compiling
+            CHECK(copy == full);
+            ++checked;
+        }
+        CHECK(checked == GetPatternRegistry().size());
+        CHECK(checked >= 82);
+    }
+}
+
+TEST_CASE("Algorithm enum constructors agree with the name constructors", "[protocol][enum][constructor][guard]") {
+    // Cipher(CipherAlgo), Hash(HashAlgo) and Dh(KeyAlgo) store the enum directly,
+    // validated against the Common tables; the name constructors resolve, then delegate. Both
+    // routes must build the same algorithm, and an out-of-range value is ProtocolNotSupportedError.
+    SECTION("every table entry builds the same algorithm from the enum and from the name") {
+        for (const auto& [algo, name] : CipherAlgos) {
+            CHECK(Cipher{algo}.String() == Cipher{name}.String());
+            CHECK(Cipher{algo}.String() == name);
+            CHECK(Cipher{algo}.GetAeadTagSize() == Cipher{name}.GetAeadTagSize());
+        }
+        for (const auto& [algo, name] : HashAlgos) {
+            CHECK(Hash{algo}.String() == Hash{name}.String());
+            CHECK(Hash{algo}.String() == name);
+            CHECK(Hash{algo}.Size() == Hash{name}.Size());
+        }
+        for (const auto& [algo, name] : KeyAlgos) {
+            CHECK(Dh{algo}.String() == Dh{name}.String());
+            CHECK(Dh{algo}.String() == name);
+            CHECK(Dh{algo}.Size() == Dh{name}.Size());
+            CHECK(Dh{algo}.PublicKeySize() == Dh{name}.PublicKeySize());
+            CHECK(Dh{algo}.IsKEM() == Dh{name}.IsKEM());
+        }
+    }
+    SECTION("an out-of-range enum value is ProtocolNotSupportedError") {
+        CHECK_THROWS_AS(Cipher{static_cast<CipherAlgo>(99)}, ProtocolNotSupportedError);
+        CHECK_THROWS_AS(Hash{static_cast<HashAlgo>(99)}, ProtocolNotSupportedError);
+        CHECK_THROWS_AS(Dh{static_cast<KeyAlgo>(99)}, ProtocolNotSupportedError);
     }
 }
 

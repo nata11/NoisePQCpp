@@ -4,6 +4,7 @@
 # and produce white-background HTML, Markdown, and/or PNG files.
 #
 # Usage: ./scripts/capture_debug_output.sh [--html] [--md] [--png] <PATTERN>
+# Set PATTERN_ZOO to run another Debug pattern_zoo (built with NOISE_DEBUG_BUILD=ON).
 #
 # Examples:
 #   ./scripts/capture_debug_output.sh XXhfs           # default: HTML + Markdown
@@ -19,10 +20,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-PATTERN_ZOO="${PROJECT_ROOT}/bin/Debug/examples/pattern_zoo"
+PATTERN_ZOO="${PATTERN_ZOO:-${PROJECT_ROOT}/cmake-build-debug-clang-21/bin/Debug/examples/pattern_zoo}"
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
-# --- Valid patterns (must match pattern_zoo.cpp) ---
+# --- Valid patterns (must match the six lists in pattern_zoo.cpp) ---
 VALID_PATTERNS=(
     # Category keywords
     ONEWAY BASIC DEFER PSK PQC HFS
@@ -30,7 +31,7 @@ VALID_PATTERNS=(
     N K X
     # Fundamental Interactive (12)
     NN NK NX KN KK KX XN XK XX IN IK IX
-    # Deferred (21)
+    # Deferred (23)
     NK1 NX1 X1N X1K XK1 X1K1 X1X XX1 X1X1
     K1N K1K KK1 K1K1 K1X KX1 K1X1
     I1N I1K IK1 I1K1 I1X IX1 I1X1
@@ -61,11 +62,12 @@ usage() {
     echo "  --md      Output Markdown (inline HTML spans for color)"
     echo "  --png     Output PNG screenshot (requires Google Chrome)"
     echo "  (default) Output both HTML and Markdown"
+    echo "  Set PATTERN_ZOO=<path> to run another Debug pattern_zoo (default: cmake-build-debug-clang-21/bin/Debug/examples/pattern_zoo)"
     echo ""
     echo "Categories:  ONEWAY  BASIC  DEFER  PSK  PQC  HFS"
     echo ""
     echo "Patterns:    N K X NN NK NX ... XXhfs pqXX etc."
-    echo "             (82 patterns total — see pattern_zoo --help)"
+    echo "             (84 patterns total; run pattern_zoo without arguments for the list)"
     echo ""
     echo "Output:  output/debug-logs/debug_<pattern>.html"
     echo "         output/debug-logs/debug_<pattern>.md"
@@ -155,6 +157,7 @@ if [[ ! -x "${PATTERN_ZOO}" ]]; then
     echo ""
     echo "Build it with:"
     echo "  cmake --build cmake-build-debug-clang-21 --target pattern_zoo"
+    echo "Or set PATTERN_ZOO to a Debug pattern_zoo built with NOISE_DEBUG_BUILD=ON."
     exit 1
 fi
 

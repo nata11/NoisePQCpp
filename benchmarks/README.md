@@ -1,6 +1,6 @@
 # NoisePQC++ Performance Benchmarks
 
-Comprehensive performance benchmarking suite for NoisePQC++ using Google Benchmark framework.
+Comprehensive performance benchmarking suite for NoisePQC++: Google Benchmark micro-benchmarks and TCP network benchmarks.
 
 ## Overview
 
@@ -13,26 +13,28 @@ This directory contains performance benchmarks for measuring and analyzing the p
 **File**: `bench_handshake.cpp`
 
 Measures local handshake performance without network overhead:
-- **Classical patterns** (XX, NK, IK, etc.) with X25519 and X448
-- **Post-Quantum patterns** (pqXX, pqNK, etc.) with ML-KEM-512/768/1024
-- **Hybrid Forward Secrecy patterns** (XXhfs, NKhfs, etc.) with X25519/X448 + ML-KEM combinations
+- **Classical patterns** (NN, XX, IK, KK) with X25519 and X448
+- **Post-Quantum patterns** (pqNN, pqXX, pqIK, pqKK) with ML-KEM-512/768/1024
+- **Hybrid Forward Secrecy patterns** (NNhfs, XXhfs, IKhfs, KKhfs) with X25519 + ML-KEM-512/768/1024 and X448 + ML-KEM-1024
+- **Key generation** for X25519, X448 and ML-KEM-512/768/1024
 
 **Usage**:
 ```bash
 # Build in Release mode (required for accurate benchmarks)
-cmake --build cmake-build-release --config Release --target bench_handshake
+cmake --build build --config Release --target bench_handshake
 
 # Run all handshake benchmarks
-./bin/Release/benchmarks/bench_handshake
+./build/bin/Release/benchmarks/bench_handshake
 
 # Run specific pattern benchmarks
-./bin/Release/benchmarks/bench_handshake --benchmark_filter=XX
-./bin/Release/benchmarks/bench_handshake --benchmark_filter=pqXX
-./bin/Release/benchmarks/bench_handshake --benchmark_filter=XXhfs
+./build/bin/Release/benchmarks/bench_handshake --benchmark_filter=XX
+./build/bin/Release/benchmarks/bench_handshake --benchmark_filter=pqXX
+./build/bin/Release/benchmarks/bench_handshake --benchmark_filter=XXhfs
 
-# Export results to JSON for analysis
-./bin/Release/benchmarks/bench_handshake --benchmark_format=json \
-  --benchmark_out=results/handshake_results.json
+# Export results to JSON for analysis (out/ is ignored by git)
+mkdir -p out
+./build/bin/Release/benchmarks/bench_handshake \
+  --benchmark_out=out/handshake_results.json --benchmark_out_format=json
 ```
 
 ### Network Benchmarks
@@ -42,18 +44,18 @@ cmake --build cmake-build-release --config Release --target bench_handshake
 Real-world network performance benchmarks measuring handshake performance over TCP:
 
 #### bench_server.cpp
-Network benchmark server that measures handshake completion rates:
-- Supports Classical, PQ, and HFS patterns
-- Handles concurrent client connections
-- Reports handshakes per second
+Network benchmark responder that bench_client and bench_stress connect to:
+- Supports the modes listed under **Modes** below
+- Serves one connection at a time
+- Prints each handshake (unless `--quiet`) and the connection count at exit; the clients do the timing
 
 **Usage**:
 ```bash
-# Start benchmark server (Terminal 1)
-./bin/Release/benchmarks/network/bench_server
+# Terminal 1: start the server (here for the XX pattern)
+./build/bin/Release/benchmarks/network/bench_server --mode xx
 
-# The server listens on port 12345 by default
-# Server outputs handshake completion metrics
+# Options: --port <p> (default 12346), --count <n> (exit after n successful
+# handshakes; by default it runs until stopped), --quiet
 ```
 
 #### bench_client.cpp
@@ -64,11 +66,13 @@ Network benchmark client that measures end-to-end handshake latency:
 
 **Usage**:
 ```bash
-# Run benchmark client (Terminal 2)
-./bin/Release/benchmarks/network/bench_client
+# Terminal 2: 100 handshakes against the server (use the server's mode)
+./build/bin/Release/benchmarks/network/bench_client --mode xx --iterations 100
 
-# With specific pattern
-./bin/Release/benchmarks/network/bench_client --pattern=pqXX
+# A post-quantum pattern, with the results written as CSV
+./build/bin/Release/benchmarks/network/bench_client --mode pqxx --iterations 100 --output client_pqxx.csv
+
+# Other options: --host <h> (default localhost), --port <p>, --latency <ms>, --quiet
 ```
 
 #### bench_stress.cpp
@@ -79,60 +83,69 @@ Stress testing tool for concurrent handshakes:
 
 **Usage**:
 ```bash
-# Run stress test with default settings
-./bin/Release/benchmarks/network/bench_stress
+# 10 concurrent clients, 10 handshakes each (the defaults), against a server in the same mode
+./build/bin/Release/benchmarks/network/bench_stress --mode xx
 
 # With custom parameters
-./bin/Release/benchmarks/network/bench_stress \
-  --clients=100 \
-  --duration=60 \
-  --pattern=XXhfs
+./build/bin/Release/benchmarks/network/bench_stress --mode xxhfs --clients 50 --iterations 20 --output stress_xxhfs.csv
+
+# Other options: --host, --port, --ramp-up <ms> (default 10), --quiet
 ```
+
+**Modes.** The three programs take the same `--mode` values, and a server
+and its clients must use the same one. Six modes are supported: `nn`, `xx`,
+`pqnn`, `pqxx`, `nnhfs` and `xxhfs`. `--help` also lists `ik`, `kk`, `pqik`,
+`pqkk`, `ikhfs` and `kkhfs`, which aren't supported yet: their initiator needs
+the responder's static key before the handshake, and the programs don't send
+it, so every handshake fails (`Success: 0/n`). Each option takes its value as a
+separate argument (`--clients 50`, not `--clients=50`).
 
 ### Example Benchmark
 
 **File**: `bench_example.cpp`
 
-Simple benchmark example demonstrating Google Benchmark usage with NoisePQC++.
+Primitive benchmarks: SHA-256 hashing (64 B to 8 KiB), X25519 key generation and DH.
 
 ## Building Benchmarks
 
 ### Prerequisites
 
-- **C++23 Compiler**: Clang 21+, GCC 15.2+, or MSVC 19.44+
+- **C++23 Compiler**: Clang 21, GCC 15.2+, or MSVC 19.44+
 - **CMake** 4.3+
 - **Ninja** build system
-- **Google Benchmark** (automatically downloaded via FetchContent)
+- **Google Benchmark** v1.10.0 (automatically downloaded via FetchContent)
+- **asio** 1.39.0 for the network benchmarks (automatically downloaded via FetchContent)
 
 ### Build Instructions
 
 **IMPORTANT**: Always build benchmarks in **Release mode** for accurate performance measurements.
 
 ```bash
-# Configure with Multi-Config Ninja generator
-cmake -B cmake-build-release -S . -G "Ninja Multi-Config" \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake
+# Configure with Multi-Config Ninja generator (debug logging off for measurements)
+cmake -B build -S . -G "Ninja Multi-Config" \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-macOS-toolchain.cmake \
+  -DNOISE_DEBUG_BUILD=OFF
 
 # Build all benchmarks in Release mode
-cmake --build cmake-build-release --config Release
+cmake --build build --config Release
 
 # Or build specific benchmark
-cmake --build cmake-build-release --config Release --target bench_handshake
-cmake --build cmake-build-release --config Release --target bench_server
-cmake --build cmake-build-release --config Release --target bench_client
-cmake --build cmake-build-release --config Release --target bench_stress
+cmake --build build --config Release --target bench_handshake
+cmake --build build --config Release --target bench_server
+cmake --build build --config Release --target bench_client
+cmake --build build --config Release --target bench_stress
 ```
 
 **Benchmark executables** are located in:
-- `bin/Release/benchmarks/` (handshake benchmarks)
-- `bin/Release/benchmarks/network/` (network benchmarks)
+- `build/bin/Release/benchmarks/` (handshake benchmarks)
+- `build/bin/Release/benchmarks/network/` (network benchmarks)
 
 ## Running Benchmarks
 
 ### Basic Usage
 
 ```bash
-cd bin/Release/benchmarks
+cd build/bin/Release/benchmarks
 
 # Run all handshake benchmarks
 ./bench_handshake
@@ -140,8 +153,8 @@ cd bin/Release/benchmarks
 # Run with verbose output
 ./bench_handshake --benchmark_verbosity=high
 
-# Run with specific iterations
-./bench_handshake --benchmark_min_time=5.0
+# Run each benchmark for at least 5 seconds
+./bench_handshake --benchmark_min_time=5s
 
 # List all available benchmarks
 ./bench_handshake --benchmark_list_tests
@@ -167,18 +180,16 @@ cd bin/Release/benchmarks
 ### Exporting Results
 
 ```bash
-# Export to JSON
-./bench_handshake --benchmark_format=json \
-  --benchmark_out=../../../results/handshake_results.json
+# From the repository root; out/ is ignored by git
+mkdir -p out
+
+# Export to JSON (the console keeps the normal table)
+./build/bin/Release/benchmarks/bench_handshake \
+  --benchmark_out=out/handshake_results.json --benchmark_out_format=json
 
 # Export to CSV
-./bench_handshake --benchmark_format=csv \
-  --benchmark_out=../../../results/handshake_results.csv
-
-# Export with console output
-./bench_handshake --benchmark_format=json \
-  --benchmark_out=results.json \
-  --benchmark_out_format=json
+./build/bin/Release/benchmarks/bench_handshake \
+  --benchmark_out=out/handshake_results.csv --benchmark_out_format=csv
 ```
 
 ## Performance Analysis
@@ -195,20 +206,19 @@ The `analysis/` directory contains tools for analyzing benchmark results:
 
 **JSON to CSV Converter** (`scripts/json_to_csv.py`):
 ```bash
-cd analysis/scripts
-python3 json_to_csv.py ../../results/handshake_results.json
+python3 analysis/scripts/json_to_csv.py out/handshake_results.json out/handshake_results.csv
+python3 analysis/scripts/json_to_csv.py --split out/handshake_results.json out/csv/   # one CSV per category
 ```
 
 ### Setting Up Analysis Environment
 
 ```bash
-cd analysis
-
-# Install Python dependencies
-pip3 install -r requirements.txt
+# Install the Python dependencies in a virtual environment
+python3 -m venv out/venv && . out/venv/bin/activate
+pip install -r analysis/requirements.txt
 
 # Start Jupyter notebook
-jupyter notebook benchmark_analysis.ipynb
+jupyter notebook analysis/benchmark_analysis.ipynb
 ```
 
 ## Benchmark Patterns
@@ -217,25 +227,28 @@ jupyter notebook benchmark_analysis.ipynb
 
 | Pattern | Description | Use Case |
 |---------|-------------|----------|
+| NN | Ephemeral keys only | Anonymous sessions, baseline cost |
 | XX | Full mutual authentication | General purpose, server-to-server |
-| NK | Known responder public key | Client-to-server, server identity known |
 | IK | Immediate known responder | Minimal latency mutual auth |
+| KK | Both static keys known in advance | Pre-provisioned peers |
 
 ### Post-Quantum Patterns
 
 | Pattern | Description | Quantum Resistance |
 |---------|-------------|-------------------|
+| pqNN | PQ ephemeral keys only | Quantum-resistant anonymous sessions |
 | pqXX | PQ mutual authentication | Full quantum resistance |
-| pqNK | PQ known responder | Quantum-resistant server auth |
 | pqIK | PQ immediate known | Low-latency PQ auth |
+| pqKK | PQ, both static keys known in advance | Quantum-resistant pre-provisioned peers |
 
 ### Hybrid Forward Secrecy Patterns
 
 | Pattern | Description | Security Level |
 |---------|-------------|----------------|
+| NNhfs | DH + KEM, ephemeral keys only | Hybrid anonymous sessions |
 | XXhfs | DH + KEM mutual auth | Defense-in-depth |
-| NKhfs | DH + KEM known responder | Hybrid server auth |
 | IKhfs | DH + KEM immediate | Low-latency hybrid |
+| KKhfs | DH + KEM, both static keys known in advance | Hybrid pre-provisioned peers |
 
 ## Interpreting Results
 
@@ -246,42 +259,21 @@ jupyter notebook benchmark_analysis.ipynb
 - **Iterations** - Number of test iterations performed
 - **Bytes/sec** - Throughput measurement
 
-### Performance Expectations
-
-**Classical patterns** (X25519):
-- XX handshake: ~500-800 μs
-- NK handshake: ~300-500 μs
-
-**Post-Quantum patterns** (ML-KEM-768):
-- pqXX handshake: ~1-2 ms
-- pqNK handshake: ~800 μs - 1.5 ms
-
-**Hybrid patterns** (X25519 + ML-KEM-768):
-- XXhfs handshake: ~1.5-2.5 ms
-- NKhfs handshake: ~1-2 ms
-
-*Note: Times vary based on CPU, compiler optimizations, and system load*
-
 ## Network Benchmark Workflow
 
 ### Complete Benchmarking Session
 
 ```bash
-# Terminal 1: Start server
-cd bin/Release/benchmarks/network
-./bench_server > server_metrics.txt
+cd build/bin/Release/benchmarks/network
 
-# Terminal 2: Run standard client test
-./bench_client --pattern=XX > client_xx_results.txt
+# Terminal 1: a server that exits after 150 successful handshakes
+./bench_server --mode xx --count 150 > server_log.txt
 
-# Terminal 3: Run stress test
-./bench_stress --clients=50 --duration=30 > stress_results.txt
+# Terminal 2: 100 handshakes, as CSV
+./bench_client --mode xx --iterations 100 --output client_xx.csv
 
-# Analyze results
-cd ../../../../analysis
-python3 scripts/analyze_network_results.py \
-  ../results/server_metrics.txt \
-  ../results/client_xx_results.txt
+# Then: 5 clients x 10 handshakes, as CSV
+./bench_stress --mode xx --clients 5 --iterations 10 --output stress_xx.csv
 ```
 
 ## Troubleshooting
@@ -292,26 +284,26 @@ python3 scripts/analyze_network_results.py \
 - Ensure you built in **Release mode** (`--config Release`)
 - Close other applications to reduce system load
 - Run benchmarks multiple times and average results
-- Use `--benchmark_min_time=5.0` for longer, more stable tests
+- Use `--benchmark_min_time=5s` for longer, more stable tests
 
 ### Issue: Network benchmarks fail to connect
 
 **Solution**:
 - Ensure server is running before starting client
-- Check that port 12345 is not in use: `lsof -i :12345`
+- Check that port 12346 (the network benchmarks' default) is not in use: `lsof -i :12346`
 - Verify firewall settings allow local connections
-- Check that both server and client use matching patterns
+- Check that both server and client use the same `--mode`
 
 ### Issue: Benchmarks take too long
 
 **Solution**:
 - Use filters to run specific benchmarks: `--benchmark_filter=XX`
-- Reduce minimum time: `--benchmark_min_time=1.0`
+- Reduce minimum time: `--benchmark_min_time=1s`
 - Run fewer iterations (Google Benchmark auto-adjusts)
 
 ## Best Practices
 
-1. **Always use Release builds** - Debug builds are 10-100x slower
+1. **Always use Release builds with `NOISE_DEBUG_BUILD=OFF`** - Debug builds leave NoisePQC++ unoptimized, and debug logging adds overhead
 2. **Minimize system load** - Close unnecessary applications
 3. **Run multiple times** - Average results for consistency
 4. **Export results** - Save data for trend analysis
@@ -328,6 +320,6 @@ python3 scripts/analyze_network_results.py \
 
 ---
 
-**Version**: NoisePQC++ v1.0.0
-**Last Updated**: 2026-04-25
-**Google Benchmark**: v1.9.1 (auto-downloaded)
+**Version**: NoisePQC++ v1.1.0
+**Last Updated**: 2026-11-13
+**Google Benchmark**: v1.10.0 (auto-downloaded)

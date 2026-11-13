@@ -1,8 +1,8 @@
 # NoisePQC++ Test Suite
 
-This directory contains the comprehensive test suite for NoisePQC++ v1.0.0 using Catch2 v3.11.0.
+This directory contains the comprehensive test suite for NoisePQC++ v1.1.0 using Catch2 v3.16.1.
 
-**Total Test Coverage**: 200+ test cases with 500+ assertions across all Noise Protocol Framework components, including classical, post-quantum, and hybrid patterns.
+**Total Test Coverage**: 374 test cases across all Noise Protocol Framework components, including classical, post-quantum, and hybrid patterns.
 
 ## Structure
 
@@ -17,16 +17,17 @@ tests/
 ├── test_symmetricstate.cpp    # SymmetricState module tests (HKDF, key derivation)
 ├── test_protocol.cpp          # Protocol module tests (protocol string parsing)
 ├── test_pattern.cpp           # Pattern module tests (pattern definitions)
-├── test_handshakestate.cpp    # HandshakeState tests (all 57 classical patterns)
+├── test_handshakestate.cpp    # HandshakeState tests (all 59 classical patterns)
 ├── test_noise_pq.cpp          # Post-Quantum pattern tests (pqXX, pqNK, etc.)
 ├── test_hfs.cpp               # Hybrid Forward Secrecy tests (XXhfs, NKhfs, etc.)
 ├── test_example.cpp           # Example integration tests
-└── test_vectors.cpp           # Noise Protocol specification test vectors
+├── test_vectors.cpp           # Cacophony test vectors
+└── test_wiping.cpp            # Secret wiping before memory is freed
 ```
 
 ## Building Tests
 
-**Note**: Catch2 v3.11.0 will be automatically downloaded via CMake FetchContent on first build if not found system-wide.
+**Note**: Catch2 v3.16.1 is downloaded automatically via CMake FetchContent on the first configure of a build tree.
 
 ### Build All Tests
 
@@ -34,7 +35,7 @@ tests/
 # From project root
 
 # Configure with the appropriate toolchain file for your platform:
-#   - macOS (Apple Silicon; Intel untested): cmake/clang21-macOS-toolchain.cmake
+#   - macOS (Apple Silicon): cmake/clang21-macOS-toolchain.cmake
 #   - Linux incl. Raspberry Pi 5 (Clang 21): cmake/clang21-linux-toolchain.cmake
 #   - Linux (GCC 15.2+): cmake/gcc15-linux-toolchain.cmake
 #   - Windows (MSVC): No toolchain file needed
@@ -47,13 +48,13 @@ cmake -B build -S . -G Ninja \
 cmake -B build -S . -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-linux-toolchain.cmake
 
-# Build all targets (Catch2 downloads automatically if needed)
+# Build all targets
 cmake --build build
 
 # Or build just the tests
 cmake --build build --target test_cipher test_cipherstate test_dh test_hash \
   test_symmetricstate test_protocol test_pattern test_handshakestate \
-  test_noise_pq test_hfs test_example test_vectors
+  test_noise_pq test_hfs test_example test_vectors test_wiping
 ```
 
 ## Running Tests
@@ -61,91 +62,88 @@ cmake --build build --target test_cipher test_cipherstate test_dh test_hash \
 ### Run All Tests via CTest
 
 ```bash
-cd build
-ctest --output-on-failure
+ctest --test-dir build --output-on-failure
 
 # Or with verbose output
-ctest -V
+ctest --test-dir build -V
 
 # Run tests in parallel (faster)
-ctest -j$(nproc)
+ctest --test-dir build -j$(nproc)
 ```
 
 ### Run Individual Test Executables
 
-```bash
-cd build
+Paths are for a single-config build; with Ninja Multi-Config, use `build/bin/<Config>/tests/`.
 
+```bash
 # Core module tests
-./tests/test_cipher
-./tests/test_cipherstate
-./tests/test_dh
-./tests/test_hash
-./tests/test_symmetricstate
-./tests/test_protocol
-./tests/test_pattern
+./build/bin/tests/test_cipher
+./build/bin/tests/test_cipherstate
+./build/bin/tests/test_dh
+./build/bin/tests/test_hash
+./build/bin/tests/test_symmetricstate
+./build/bin/tests/test_protocol
+./build/bin/tests/test_pattern
 
 # Comprehensive tests
-./tests/test_handshakestate      # All 57 classical Noise patterns
-./tests/test_noise_pq            # Post-Quantum patterns (pqXX, pqNK, etc.)
-./tests/test_hfs                 # Hybrid Forward Secrecy patterns
-./tests/test_vectors             # Noise spec test vectors
-./tests/test_example             # Integration examples
+./build/bin/tests/test_handshakestate  # All 59 classical Noise patterns
+./build/bin/tests/test_noise_pq        # Post-Quantum patterns (pqXX, pqNK, etc.)
+./build/bin/tests/test_hfs             # Hybrid Forward Secrecy patterns
+./build/bin/tests/test_vectors         # Cacophony test vectors
+./build/bin/tests/test_wiping          # Secret wiping
+./build/bin/tests/test_example         # Integration examples
 ```
 
 ### Run Specific Tests via CTest
 
 ```bash
-cd build
-
-# Run tests matching a pattern
-ctest -R test_cipher              # Only cipher tests
-ctest -R test_handshake           # Only handshake tests
-ctest -R test_                    # All tests (matches "test_" prefix)
+# CTest names each test after its Catch2 test case (for example "Cipher - ...")
+ctest --test-dir build -R "^Cipher - "        # Only cipher tests
+ctest --test-dir build -R "^HandshakeState"   # Only handshake tests
 
 # Run with detailed output
-ctest -R test_dh --verbose
+ctest --test-dir build -R "^Dh - " --verbose
 ```
 
 ### Run Specific Test Cases
 ```bash
 # Cipher module tests
-./test_cipher "[encryption]"    # Run only encryption tests
-./test_cipher "[chacha]"         # Run only ChaCha20 tests
-./test_cipher "[aesgcm]"         # Run only AES-GCM tests
-./test_cipher "[security]"       # Run security-related tests
+./build/bin/tests/test_cipher "[encryption]"           # Run only encryption tests
+./build/bin/tests/test_cipher "[chacha]"               # Run only ChaCha20 tests
+./build/bin/tests/test_cipher "[aesgcm]"               # Run only AES-GCM tests
+./build/bin/tests/test_cipher "[security]"             # Run security-related tests
 
 # CipherState module tests
-./test_cipherstate "[nonce]"     # Run nonce-related tests
-./test_cipherstate "[rekey]"     # Run rekey tests
-./test_cipherstate "[roundtrip]" # Run encryption/decryption roundtrip tests
+./build/bin/tests/test_cipherstate "[nonce]"           # Run nonce-related tests
+./build/bin/tests/test_cipherstate "[rekey]"           # Run rekey tests
+./build/bin/tests/test_cipherstate "[roundtrip]"       # Run encryption/decryption roundtrip tests
 
 # Dh module tests
-./test_dh "[keygen]"             # Run key generation tests
-./test_dh "[dh-operation]"       # Run DH operation tests
-./test_dh "[x25519]"             # Run X25519 specific tests
-./test_dh "[x448]"               # Run X448 specific tests
+./build/bin/tests/test_dh "[keygen]"                   # Run key generation tests
+./build/bin/tests/test_dh "[dh-operation]"             # Run DH operation tests
+./build/bin/tests/test_dh "[x25519]"                   # Run X25519 specific tests
+./build/bin/tests/test_dh "[x448]"                     # Run X448 specific tests
 
 # Hash module tests
-./test_hash "[hashing]"          # Run hashing tests
-./test_hash "[sha256]"           # Run SHA-256 specific tests
-./test_hash "[blake2b]"          # Run BLAKE2b specific tests
-./test_hash "[test-vector]"      # Run known test vector tests
+./build/bin/tests/test_hash "[hashing]"                # Run hashing tests
+./build/bin/tests/test_hash "[sha256]"                 # Run SHA-256 specific tests
+./build/bin/tests/test_hash "[blake2b]"                # Run BLAKE2b specific tests
+./build/bin/tests/test_hash "[test-vector]"            # Run known test vector tests
 
 # SymmetricState module tests
-./test_symmetricstate "[initialize]"  # Run initialization tests
-./test_symmetricstate "[mixkey]"      # Run MixKey tests
-./test_symmetricstate "[encrypt]"     # Run encryption tests
-./test_symmetricstate "[split]"       # Run Split tests
-./test_symmetricstate "[integration]" # Run integration tests
+./build/bin/tests/test_symmetricstate "[initialize]"   # Run initialization tests
+./build/bin/tests/test_symmetricstate "[mixkey]"       # Run MixKey tests
+./build/bin/tests/test_symmetricstate "[encrypt]"      # Run encryption tests
+./build/bin/tests/test_symmetricstate "[split]"        # Run Split tests
+./build/bin/tests/test_symmetricstate "[integration]"  # Run integration tests
 
 # List all test cases for a module
-./test_cipher --list-tests
-./test_dh --list-tests
-./test_symmetricstate --list-tests
+./build/bin/tests/test_cipher --list-tests
+./build/bin/tests/test_dh --list-tests
+./build/bin/tests/test_symmetricstate --list-tests
 
 # List all tags
-./test_cipher --list-tags
+./build/bin/tests/test_cipher --list-tags
 ```
 
 ## Test Coverage
@@ -161,7 +159,7 @@ ctest -R test_dh --verbose
 - ✅ Reset functionality
 - ✅ Edge cases (empty plaintext, large plaintext)
 - ✅ Security tests (wrong key, wrong nonce, tampered ciphertext)
-- ✅ Utility methods (String(), getAeadTagSize())
+- ✅ Utility methods (String(), GetAeadTagSize())
 
 ### CipherState Module Tests (`test_cipherstate.cpp`)
 - ✅ Default, copy, and move constructors
@@ -169,7 +167,7 @@ ctest -R test_dh --verbose
 - ✅ Nonce management and incrementation
 - ✅ Encryption and decryption with and without keys
 - ✅ Associated data handling
-- ✅ Rekey functionality with hash algorithm parameter
+- ✅ Rekey (Noise spec Section 4.2 REKEY)
 - ✅ Reset functionality
 - ✅ Edge cases (empty plaintext, large plaintext)
 - ✅ Multiple sequential encryptions
@@ -241,22 +239,19 @@ ctest -R test_dh --verbose
 - ✅ Invalid protocol string error handling
 - ✅ Pattern describe() method (outputs formatted pattern structure)
 - ✅ Comprehensive combination testing (64 protocol combinations)
+- ✅ HFS protocol strings, all DH+KEM combinations and the deferred HFS patterns
+- ✅ Rejection of non-Noise names, unregistered HFS names, malformed DH+KEM forms and incompatible combinations
+- ✅ `String()` for every registry pattern
 
 ### Pattern Module Tests (`test_pattern.cpp`)
-- ✅ Pattern name parsing and validation
-- ✅ Pattern token structure verification
-- ✅ All 57 Noise pattern definitions
-- ✅ Pattern categories (one-way, interactive, deferred, PSK)
-- ✅ Pattern token sequences (e, s, ee, es, se, ss, psk)
-- ✅ Pre-message patterns (initiator/responder static keys)
-- ✅ Message pattern structures
-- ✅ Pattern modifiers (deferred patterns, PSK patterns)
+- ✅ Every registry pattern passes `HandshakePattern::IsValid` (all 107: 59 classical, 13 PQ, 35 HFS)
+- ✅ The one-way flag matches the message count
 
 ### HandshakeState Module Tests (`test_handshakestate.cpp`)
-- ✅ **All 57 Noise Protocol Patterns** (comprehensive coverage)
+- ✅ **All 59 classical patterns** (3 one-way + 12 interactive + 23 deferred + 21 PSK)
   - 3 one-way patterns (N, K, X)
   - 12 fundamental interactive patterns (NN, NK, NX, KN, KK, KX, XN, XK, XX, IN, IK, IX)
-  - 21 deferred patterns (NK1, NX1, X1N, X1K, XK1, X1K1, X1X, XX1, X1X1, K1N, K1K, KK1, K1K1, K1X, KX1, K1X1, I1N, I1K, IK1, I1K1, I1X, IX1, I1X1)
+  - 23 deferred patterns (NK1, NX1, X1N, X1K, XK1, X1K1, X1X, XX1, X1X1, K1N, K1K, KK1, K1K1, K1X, KX1, K1X1, I1N, I1K, IK1, I1K1, I1X, IX1, I1X1)
   - 21 PSK patterns (Npsk0, Kpsk0, Xpsk1, NNpsk0, NNpsk2, NKpsk0, NKpsk2, NXpsk2, XNpsk3, XKpsk3, XXpsk3, KNpsk0, KNpsk2, KKpsk0, KKpsk2, KXpsk2, INpsk1, INpsk2, IKpsk1, IKpsk2, IXpsk2)
 - ✅ Pattern-specific handshake execution
 - ✅ Key configuration validation (static, ephemeral, remote static)
@@ -273,21 +268,21 @@ ctest -R test_dh --verbose
 
 **Running HandshakeState Tests**:
 ```bash
-# Run all 57 pattern tests
-./tests/test_handshakestate
+# Run all HandshakeState tests
+./build/bin/tests/test_handshakestate
 
 # Run specific pattern categories
-./tests/test_handshakestate "[oneway]"      # All 3 one-way patterns
-./tests/test_handshakestate "[deferred]"    # All 21 deferred patterns
-./tests/test_handshakestate "[psk]"         # All 21 PSK patterns
-./tests/test_handshakestate "[xx]"          # XX pattern only
+./build/bin/tests/test_handshakestate "[oneway]"    # The 6 one-way patterns (N, K, X and their PSK variants)
+./build/bin/tests/test_handshakestate "[deferred]"  # All 23 deferred patterns
+./build/bin/tests/test_handshakestate "[psk]"       # All 21 PSK patterns
+./build/bin/tests/test_handshakestate "[xx]"        # XX pattern only
 
 # List all test cases
-./tests/test_handshakestate --list-tests
+./build/bin/tests/test_handshakestate --list-tests
 ```
 
 ### Post-Quantum Noise Tests (`test_noise_pq.cpp`)
-- ✅ **PQNoise pattern execution** (pqNN, pqNK, pqNX, pqXN, pqXK, pqXX, pqKN, pqKK, pqKX, pqIN, pqIK, pqIX)
+- ✅ **PQNoise pattern execution**, all 13 (pqN, pqNN, pqNK, pqNX, pqXN, pqXK, pqXX, pqKN, pqKK, pqKX, pqIN, pqIK, pqIX)
 - ✅ **ML-KEM integration** with handshake state
 - ✅ **KEM token handling** (ekem, skem)
 - ✅ **Complete PQ handshake lifecycle**
@@ -298,17 +293,18 @@ ctest -R test_dh --verbose
 
 **Running PQNoise Tests**:
 ```bash
-./tests/test_noise_pq
+./build/bin/tests/test_noise_pq
 
 # Run specific PQ pattern
-./tests/test_noise_pq "[pqxx]"
-./tests/test_noise_pq "[pqnk]"
+./build/bin/tests/test_noise_pq "[pqxx]"
+./build/bin/tests/test_noise_pq "[pqnk]"
 
 # List all PQ test cases
-./tests/test_noise_pq --list-tests
+./build/bin/tests/test_noise_pq --list-tests
 ```
 
 ### Hybrid Forward Secrecy Tests (`test_hfs.cpp`)
+- ✅ **All 35 HFS patterns** (12 interactive + 23 deferred)
 - ✅ **HFS protocol string parsing** (NNhfs, NKhfs, XXhfs, etc.)
 - ✅ **DH + KEM combination validation**
 - ✅ **Pattern transformation and HFS modifier**
@@ -320,47 +316,46 @@ ctest -R test_dh --verbose
 
 **Running HFS Tests**:
 ```bash
-./tests/test_hfs
+./build/bin/tests/test_hfs
 
 # Run specific HFS pattern
-./tests/test_hfs "[xxhfs]"
-./tests/test_hfs "[nkhfs]"
+./build/bin/tests/test_hfs "[xxhfs]"
+./build/bin/tests/test_hfs "[nkhfs]"
 
 # List all HFS test cases
-./tests/test_hfs --list-tests
+./build/bin/tests/test_hfs --list-tests
 ```
 
 ### Example Integration Tests (`test_example.cpp`)
-- ✅ Complete handshake workflow examples
-- ✅ Protocol construction from strings
-- ✅ Keypair generation and management
-- ✅ Full handshake execution (multiple patterns)
-- ✅ Transport encryption after handshake
-- ✅ Error handling examples
-- ✅ Real-world usage patterns
-- ✅ Integration of all modules
+- ✅ Protocol construction from a string, and manual vs string
+- ✅ Full XX handshake with keypair generation
+- ✅ Transport encryption after the handshake
 
 **Running Example Tests**:
 ```bash
-./tests/test_example
+./build/bin/tests/test_example
 ```
 
-### Noise Protocol Specification Test Vectors (`test_vectors.cpp`)
-- ✅ Official Noise Protocol Framework test vectors (from noiseprotocol.org)
-- ✅ Known-answer tests for cryptographic correctness
-- ✅ Handshake pattern validation against specification
-- ✅ Message payload encryption/decryption verification
-- ✅ Handshake hash validation
-- ✅ Multiple pattern test vectors (XX, IK, etc.)
-- ✅ PSK pattern test vectors
-- ✅ Ensures spec compliance and interoperability
+### Cacophony Test Vectors (`test_vectors.cpp`)
+- ✅ All 944 vectors in `testdata/cacophony.json` (336 of them PSK)
+- ✅ Each vector run from the initiator and the responder side
+- ✅ Every message (payload and ciphertext) and the handshake hash compared
 
 **Running Test Vector Tests**:
 ```bash
-./tests/test_vectors
+./build/bin/tests/test_vectors
 
-# These tests validate against official Noise Protocol test vectors
-# Ensures cryptographic correctness and specification compliance
+# Runs all Cacophony vectors from both sides
+```
+
+### Wiping Tests (`test_wiping.cpp`)
+- ✅ A test hook sees freed buffers (macOS, Linux and Windows)
+- ✅ The SymmetricState destructor scrubs the chaining key
+- ✅ An XX handshake leaves no secret in freed memory
+
+**Running Wiping Tests**:
+```bash
+./build/bin/tests/test_wiping
 ```
 
 ## Adding New Tests
@@ -370,7 +365,7 @@ To add tests for a new module:
 1. Create `test_<module>.cpp` in the `tests/` directory
 2. Include Catch2 headers and import your module
 3. Write test cases using Catch2 macros
-4. Update `CMakeLists.txt` to add the new test target
+4. In `CMakeLists.txt`, add the executable linked to `NoisePQC::noisepqc` and `Catch2::Catch2`, then `catch_discover_tests(<target>)` and `noisepqc_optimize_target(<target>)`
 
 Example structure:
 ```cpp
@@ -385,6 +380,8 @@ TEST_CASE("Module - Feature", "[module][tag]") {
 }
 
 int main(int argc, char* argv[]) {
+    // Disable all logging during tests for clean output
+    Noise::DisableAllLogging();
     return Catch::Session().run(argc, argv);
 }
 ```

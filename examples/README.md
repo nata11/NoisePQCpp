@@ -1,6 +1,6 @@
 # NoisePQC++ Examples
 
-This directory contains comprehensive examples demonstrating the NoisePQC++ v1.0.0 API, including classical, post-quantum, and hybrid Noise Protocol patterns.
+This directory contains comprehensive examples demonstrating the NoisePQC++ v1.1.0 API, including classical, post-quantum, and hybrid Noise Protocol patterns.
 
 ## Overview
 
@@ -24,13 +24,13 @@ The examples are designed to help you learn and understand the Noise Protocol Fr
 
 ## Building Examples
 
-**Note**: Catch2 v3.11.0 will be automatically downloaded via CMake FetchContent on first build if not found system-wide.
+**Note**: Catch2 v3.16.1 and asio 1.39.0 are downloaded automatically via CMake FetchContent on the first configure of a build tree.
 
 ```bash
 # From project root
 
 # Configure with the appropriate toolchain file for your platform:
-#   - macOS (Apple Silicon; Intel untested): cmake/clang21-macOS-toolchain.cmake
+#   - macOS (Apple Silicon): cmake/clang21-macOS-toolchain.cmake
 #   - Linux incl. Raspberry Pi 5 (Clang 21): cmake/clang21-linux-toolchain.cmake
 #   - Linux (GCC 15.2+): cmake/gcc15-linux-toolchain.cmake
 #   - Windows (MSVC): No toolchain file needed
@@ -55,10 +55,10 @@ cmake --build build --target pattern_zoo
 - Ensures correct compiler (Clang 21 or GCC 15.2+) is used
 - Configures the appropriate C++ standard library (libc++ for Clang, libstdc++ for GCC)
 - Sets proper include paths for headers
-- Configures linker flags and rpath for standard library
+- Configures linker flags (on Linux, the C++ runtime is linked statically)
 - Enables `import std;` support automatically
 
-Examples will be located in `build/examples/`.
+Examples will be located in `build/bin/examples/` (`build/bin/<Config>/examples/` with Ninja Multi-Config).
 
 ## example_test.cpp
 
@@ -69,7 +69,7 @@ This example demonstrates the full lifecycle of a Noise Protocol handshake with 
 ### What It Demonstrates
 
 1. **Protocol Construction**
-   - Creating protocols from strings (e.g., `"Noise_XX_25519_ChaChaPoly_SHA256"`)
+   - Creating protocols from strings (e.g., `"Noise_XX_25519_AESGCM_BLAKE2s"`)
    - Manual protocol construction with individual components
    - Protocol validation and string conversion
 
@@ -100,7 +100,7 @@ This example demonstrates the full lifecycle of a Noise Protocol handshake with 
 ### Running
 
 ```bash
-cd build/examples
+cd build/bin/examples
 
 # Run the complete API demonstration
 ./example_test
@@ -110,7 +110,7 @@ cd build/examples
 
 ```
 ================================================================================
-     NOISE PROTOCOL FRAMEWORK - API EXAMPLE
+  NOISE PROTOCOL FRAMEWORK - API EXAMPLE
 ================================================================================
 This example demonstrates the complete Noise API:
   1. Protocol construction (from string and manual)
@@ -122,12 +122,17 @@ This example demonstrates the complete Noise API:
 ================================================================================
 
 --------------------------------------------------------------------------------
-     SECTION 1: Protocol Construction
+  SECTION 1: Protocol Construction
 --------------------------------------------------------------------------------
 
 1.1 Creating protocol from string:
-Protocol: Noise_XX_25519_ChaChaPoly_SHA256
-  ✓ Successfully created protocol from string
+    Input: "Noise_XX_25519_AESGCM_BLAKE2s"
+    ✓ Protocol created successfully
+      Pattern: XX
+      DH:      25519
+      Cipher:  AESGCM
+      Hash:    BLAKE2s
+      Full:    Noise_XX_25519_AESGCM_BLAKE2s
 
 [... detailed output continues ...]
 ```
@@ -143,28 +148,28 @@ Protocol: Noise_XX_25519_ChaChaPoly_SHA256
 
 ## pattern_zoo.cpp
 
-**Purpose**: Interactive explorer for all 57 Noise Protocol patterns
+**Purpose**: Interactive explorer for 84 Noise patterns (59 classical, 13 PQ and the 12 interactive HFS patterns)
 
-This tool allows you to run and observe any of the 57 Noise patterns or entire categories of patterns.
+This tool allows you to run and observe any of these patterns or entire categories of patterns.
 
 ### What It Demonstrates
 
-- All Noise handshake patterns (classical, PQ, HFS)
+- Classical, PQ and HFS handshake patterns
 - Pattern-specific message flows
 - Pre-message patterns (static key knowledge)
 - Message patterns (tokens: e, s, ee, es, se, ss, psk, ekem, skem, e1, ekem1)
 - Pattern categories:
   - **One-Way** (3 patterns): N, K, X
   - **Fundamental Interactive** (12 patterns): NN, NK, NX, KN, KK, KX, XN, XK, XX, IN, IK, IX
-  - **Deferred** (21 patterns): NK1, NX1, X1N, X1K, XK1, X1K1, X1X, XX1, X1X1, K1N, K1K, KK1, K1K1, K1X, KX1, K1X1, I1N, I1K, IK1, I1K1, I1X, IX1, I1X1
+  - **Deferred** (23 patterns): NK1, NX1, X1N, X1K, XK1, X1K1, X1X, XX1, X1X1, K1N, K1K, KK1, K1K1, K1X, KX1, K1X1, I1N, I1K, IK1, I1K1, I1X, IX1, I1X1
   - **PSK** (21 patterns): Npsk0, Kpsk0, Xpsk1, NNpsk0, NNpsk2, NKpsk0, NKpsk2, NXpsk2, XNpsk3, XKpsk3, XXpsk3, KNpsk0, KNpsk2, KKpsk0, KKpsk2, KXpsk2, INpsk1, INpsk2, IKpsk1, IKpsk2, IXpsk2
   - **Post-Quantum** (13 patterns): pqN, pqNN, pqNK, pqNX, pqXN, pqXK, pqXX, pqKN, pqKK, pqKX, pqIN, pqIK, pqIX
-  - **HFS** (12+ patterns): NNhfs, NKhfs, NXhfs, XXhfs, and all other interactive patterns with HFS modifier
+  - **HFS** (12 patterns): NNhfs, NKhfs, NXhfs, KNhfs, KKhfs, KXhfs, XNhfs, XKhfs, XXhfs, INhfs, IKhfs, IXhfs
 
 ### Usage
 
 ```bash
-cd build/examples
+cd build/bin/examples
 
 # Run a specific pattern
 ./pattern_zoo XX              # XX pattern
@@ -176,10 +181,10 @@ cd build/examples
 # Run all patterns in a category
 ./pattern_zoo ONEWAY          # All 3 one-way patterns
 ./pattern_zoo BASIC           # All 12 fundamental interactive patterns
-./pattern_zoo DEFER           # All 21 deferred patterns
+./pattern_zoo DEFER           # All 23 deferred patterns
 ./pattern_zoo PSK             # All 21 PSK patterns
-./pattern_zoo PQ              # All PQ patterns
-./pattern_zoo HFS             # All HFS patterns
+./pattern_zoo PQC             # All 13 PQ patterns
+./pattern_zoo HFS             # All 12 HFS patterns
 
 # Show usage help
 ./pattern_zoo
@@ -191,31 +196,31 @@ cd build/examples
 ./pattern_zoo XX
 ```
 
-**Output**:
+**Output** (an excerpt of a Debug build's run, colors removed):
 ```
 ================================================================================
-     NOISE PATTERN ZOO - PATTERN EXPLORER
+       NOISE PROTOCOL HANDSHAKE PATTERNS DEMONSTRATION
 ================================================================================
-Testing Pattern: XX
+Requested Pattern: XX
+...
 ================================================================================
+       NOISE XX PATTERN TEST
+================================================================================
+Description: Mutual authentication, no prior knowledge
+Expected messages: 3
 
-Pattern: XX
-  Pre-message pattern (initiator):
-    (none)
-  Pre-message pattern (responder):
-    (none)
-  Message patterns:
-    -> e
-    <- e, ee, s, es
-    -> s, se
+Pattern structure:
+XX:
+  -> e
+  <- e, ee, s, es
+  -> s, se
 
-[... detailed handshake execution with state transitions ...]
+[... handshake with state transitions ...]
 
-✓ XX pattern completed successfully
-  - Messages exchanged: 3
-  - Handshake complete: Yes
-  - Transport keys generated: Yes
+✓✓✓ XX PATTERN TEST PASSED ✓✓✓
 ```
+
+A full captured run is in [output/debug-logs/debug_xx.md](../output/debug-logs/debug_xx.md).
 
 ### Example: Running All PSK Patterns
 
@@ -271,7 +276,7 @@ This example demonstrates the complete PQNoise API, showing how to use post-quan
 ### Running
 
 ```bash
-cd build/examples
+cd build/bin/examples
 
 # Run the PQ API demonstration
 ./example_test_pq
@@ -300,7 +305,7 @@ The **[asio-networking/](asio-networking/)** directory contains TCP client/serve
 ### Quick Start
 
 ```bash
-cd build/examples/asio
+cd build/bin/examples/asio
 
 # Terminal 1: Start server
 ./noise_server
@@ -312,11 +317,11 @@ cd build/examples/asio
 ### Multi-Mode Example
 
 ```bash
-# Server with PQ mode
-./noise_server_multi --mode pqxx
+# Server with PQ mode (the mode is the first argument: noise_server_multi [mode] [port])
+./noise_server_multi pqxx
 
-# Client connecting with matching mode
-./noise_client_multi --mode pqxx
+# Client connecting with matching mode (noise_client_multi [mode] [host] [port])
+./noise_client_multi pqxx
 ```
 
 For detailed documentation, see **[asio-networking/README.md](asio-networking/README.md)**.
@@ -404,7 +409,8 @@ HandshakeConfig bobCfg{
 HandshakeState bobHs(bobCfg);
 
 // Execute handshake
-auto msg1 = aliceHs.WriteMessage({'h', 'e', 'l', 'l', 'o'});
+std::vector<std::uint8_t> hello{'h', 'e', 'l', 'l', 'o'};
+auto msg1 = aliceHs.WriteMessage(hello);
 bobHs.ReadMessage(msg1);
 
 auto msg2 = bobHs.WriteMessage({});
@@ -413,9 +419,11 @@ aliceHs.ReadMessage(msg2);
 auto msg3 = aliceHs.WriteMessage({});
 bobHs.ReadMessage(msg3);
 
-// Get transport cipher states
-auto [aliceTx, aliceRx] = *aliceHs.GetStatus().cipherStates;
-auto [bobRx, bobTx] = *bobHs.GetStatus().cipherStates;
+// Take the transport cipher states (moved out of the HandshakeState, not copied)
+auto aliceStates = aliceHs.TakeCipherStates();   // std::optional<std::pair<CipherState, CipherState>>
+auto& [aliceTx, aliceRx] = *aliceStates;          // initiator: cs1 sends, cs2 receives
+auto bobStates = bobHs.TakeCipherStates();
+auto& [bobRx, bobTx] = *bobStates;                // responder: cs1 receives, cs2 sends
 ```
 
 ### Creating Protocols
@@ -441,17 +449,17 @@ Protocol p5("Noise_XXhfs_25519+M768_ChaChaPoly_SHA256");
 
 ```cpp
 // Create protocol with PSK
-Protocol protocol(NNpsk0, X25519, ChaChaPoly, SHA256);
+Protocol protocol("Noise_NNpsk0_25519_ChaChaPoly_SHA256");
 
-// Generate PSK (32 bytes for ChaChaPoly/AESGCM)
-std::vector<uint8_t> psk(32);
+// A PSK is always 32 bytes
+std::array<std::uint8_t, SYMMETRIC_KEY_SIZE> psk{};
 // ... fill with shared secret ...
 
 // Configure with PSK
 HandshakeConfig cfg{
     .protocol = protocol,
     .isInitiator = true,
-    .psk = psk
+    .preSharedKeys = {psk}
 };
 HandshakeState hs(cfg);
 ```
@@ -469,7 +477,7 @@ HandshakeState hs(cfg);
 
 2. **Explore with pattern_zoo.cpp**
    - Try different patterns (start with XX, NN, NK)
-   - Run pattern categories (ONEWAY, BASIC, PQ, HFS)
+   - Run pattern categories (ONEWAY, BASIC, PQC, HFS)
    - Compare message flows between patterns
 
 3. **Learn Post-Quantum with example_test_pq.cpp**
@@ -522,14 +530,14 @@ For performance benchmarking and optimization:
 ### Build Issues
 
 **Problem**: Examples won't compile
-**Solution**: Ensure you're using C++23 compiler (Clang 21+, GCC 15.2+, or MSVC 19.44+)
+**Solution**: Ensure you're using C++23 compiler (Clang 21, GCC 15.2+, or MSVC 19.44+)
 
 ```bash
-cmake -B build -S . -G Ninja -DCMAKE_CXX_COMPILER=clang++-18
+cmake -B build -S . -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/clang21-linux-toolchain.cmake
 ```
 
 **Problem**: Catch2 not found
-**Solution**: It will auto-download. Ensure you have internet connection on first build.
+**Solution**: It will auto-download. Ensure you have internet connection on the first configure.
 
 ### Runtime Issues
 
@@ -541,7 +549,7 @@ cmake -B build -S . -G Ninja -DCMAKE_CXX_COMPILER=clang++-18
 
 ---
 
-**Version**: NoisePQC++ v1.0.0
-**Last Updated**: 2026-04-25
+**Version**: NoisePQC++ v1.1.0
+**Last Updated**: 2026-11-13
 **Botan Version**: 3.13.0
-**Catch2 Version**: 3.11.0
+**Catch2 Version**: 3.16.1

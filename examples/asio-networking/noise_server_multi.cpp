@@ -182,12 +182,14 @@ private:
         }
 
         // Verify handshake completed
-        auto status = hs.GetStatus();
+        const auto& status = hs.GetStatus();
         if (!status.IsComplete()) {
             throw std::runtime_error("Handshake did not complete");
         }
 
-        if (!status.cipherStates.has_value()) {
+        // Take the transport states out of the HandshakeState (moved, not copied)
+        auto cs = hs.TakeCipherStates();
+        if (!cs) {
             throw std::runtime_error("No cipher states available after handshake");
         }
 
@@ -197,7 +199,7 @@ private:
         print_bytes_hex("  Handshake hash", status.handshakeHash);
 
         // For responder: first = Rx, second = Tx
-        return {status.cipherStates->first, status.cipherStates->second};
+        return {std::move(cs->first), std::move(cs->second)};
     }
 
     void transport_loop(tcp::socket& socket, CipherState& rx, CipherState& tx) {

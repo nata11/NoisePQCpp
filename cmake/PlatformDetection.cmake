@@ -10,25 +10,20 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(PLATFORM_DIR "plat_win_x86")
 
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    # Targets: macOS (Apple Silicon; Intel builds but is untested as of 1.0.0)
+    # Target: macOS (Apple Silicon)
     message(STATUS "Detected macOS processor: '${CMAKE_SYSTEM_PROCESSOR}'")
 
     if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR
             CMAKE_SYSTEM_PROCESSOR MATCHES "arm64" OR
             CMAKE_SYSTEM_PROCESSOR STREQUAL "" OR
             CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
-        # Apple Silicon Mac (including M4)
+        # Apple Silicon Mac
         message(STATUS "Configuring for macOS Apple Silicon (arm64)")
         set(PLATFORM_DIR "plat_mac_arm64")
 
     elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR
             CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
-        # Intel Mac: untested as of 1.0.0; plat_mac_x86 will be removed in a future release
-        message(STATUS "Configuring for macOS Intel (x86_64)")
-        message(WARNING "macOS on Intel (x86_64) is untested as of NoisePQC++ 1.0.0. "
-                "The build should work, pinned to the macOS 26 SDK. The Intel Botan sources "
-                "(third_party/botan/plat_mac_x86) will be removed in a future release.")
-        set(PLATFORM_DIR "plat_mac_x86")
+        message(FATAL_ERROR "macOS on Intel (x86_64) is not supported since NoisePQC++ 1.1.0 (Apple Silicon only)")
 
     else ()
         message(FATAL_ERROR "Unsupported macOS processor: '${CMAKE_SYSTEM_PROCESSOR}', CMAKE_OSX_ARCHITECTURES: '${CMAKE_OSX_ARCHITECTURES}'")
@@ -37,7 +32,7 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # Targets: Linux (x86_64 and aarch64)
     if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
-        # Raspberry Pi 4/5 (arm64)
+        # Linux arm64 (Raspberry Pi 5 and other aarch64 hosts)
         message(STATUS "Configuring for Linux aarch64")
         set(PLATFORM_DIR "plat_linux_arm64")
     elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")

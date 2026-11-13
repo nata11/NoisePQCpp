@@ -165,7 +165,7 @@ int main() {
     // Benchmark ML-KEM-512
     auto start = high_resolution_clock::now();
     for (int i = 0; i < iterations; ++i) {
-        dh512.GenerateKeypair();
+        [[maybe_unused]] const auto kp = dh512.GenerateKeypair();
     }
     auto keygen_512_duration = duration_cast<microseconds>(high_resolution_clock::now() - start);
 
@@ -184,7 +184,7 @@ int main() {
     // Benchmark ML-KEM-768
     start = high_resolution_clock::now();
     for (int i = 0; i < iterations; ++i) {
-        dh768.GenerateKeypair();
+        [[maybe_unused]] const auto kp = dh768.GenerateKeypair();
     }
     auto keygen_768_duration = duration_cast<microseconds>(high_resolution_clock::now() - start);
 
@@ -204,7 +204,7 @@ int main() {
     // Benchmark ML-KEM-1024
     start = high_resolution_clock::now();
     for (int i = 0; i < iterations; ++i) {
-        dh1024.GenerateKeypair();
+        [[maybe_unused]] const auto kp = dh1024.GenerateKeypair();
     }
     auto keygen_1024_duration = duration_cast<microseconds>(high_resolution_clock::now() - start);
 

@@ -11,11 +11,11 @@ third-party components used with this project.
 
 Known third-party components include:
 
-- Botan
-- Catch2
-- Google Benchmark
-- ASIO
-- nlohmann JSON for Modern C++ library
+- Botan (bundled amalgamation, `third_party/botan/`)
+- Catch2 (downloaded at configure time by CMake FetchContent)
+- Google Benchmark (downloaded at configure time by CMake FetchContent)
+- ASIO (downloaded at configure time by CMake FetchContent)
+- nlohmann JSON for Modern C++ library (bundled header, `third_party/nlohmann/`)
 
 Please refer to the corresponding third-party project repositories,
 distribution metadata, and bundled license files where applicable.

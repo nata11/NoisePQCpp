@@ -19,7 +19,7 @@
 //
 
 //
-// Example Test - Comprehensive API demonstration using Catch2 v3.11
+// Example Test - Comprehensive API demonstration using Catch2 v3
 //
 
 #include <catch2/catch_test_macros.hpp>
@@ -109,7 +109,7 @@ TEST_CASE("Example - Full XX handshake and transport", "[example][handshake]") {
     REQUIRE(bobRecv1 == alicePlaintextE);
     REQUIRE_FALSE(bobHs.GetStatus().IsComplete());
 
-    // Message 2: Bob -> Alice (bob) -> e, ee, s, es
+    // Message 2: Bob -> Alice (bob) <- e, ee, s, es
     auto bobMsg1 = bobHs.WriteMessage({});  // Empty payload
     REQUIRE_FALSE(bobMsg1.empty());
     REQUIRE_FALSE(bobHs.GetStatus().IsComplete());

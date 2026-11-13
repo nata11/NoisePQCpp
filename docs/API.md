@@ -1,9 +1,9 @@
 # API Reference
 
-**Version**: 1.0.0
-**Last Updated**: 2026-04-25
+**Version**: 1.1.0
+**Last Updated**: 2026-11-13
 
-This document provides a comprehensive reference for the NoisePQC++ v1.0.0 public API, including classical, post-quantum (PQNoise), and hybrid forward secrecy (HFS) features.
+This document provides a comprehensive reference for the NoisePQC++ v1.1.0 public API, including classical, post-quantum (PQNoise), and hybrid forward secrecy (HFS) features.
 
 ## Table of Contents
 
@@ -18,6 +18,11 @@ This document provides a comprehensive reference for the NoisePQC++ v1.0.0 publi
 - [Protocol](#protocol)
 - [Pattern](#pattern)
 - [HandshakeState](#handshakestate)
+- [Usage Examples](#usage-examples)
+- [Error Handling](#error-handling)
+- [Key Hygiene](#key-hygiene)
+- [Thread Safety](#thread-safety)
+- [See Also](#see-also)
 
 ## Importing the Module
 
@@ -104,7 +109,7 @@ constexpr std::size_t M1024_CIPHERTEXT_SIZE = 1568;
 
 ## Logging Control
 
-**Note**: Logging functions are only available in debug builds (`-DNOISE_DEBUG_BUILD=ON`). In production builds, they are no-ops.
+**Note**: The logging functions exist in every build; they log only when `NOISE_DEBUG_BUILD` is ON (the default) and are no-ops otherwise.
 
 ### Global Logging Control
 
@@ -176,9 +181,15 @@ Cipher cipher3(ChaChaPoly);          // Using string constant
 Cipher cipher4("AESGCM");            // Direct string
 ```
 
-**Note**: String names are mapped internally:
-- `"ChaChaPoly"` → `"ChaCha20Poly1305"` (Botan name)
-- `"AESGCM"` → `"AES-256/GCM"` (Botan name)
+**Accepted names**: exactly the Noise names `"ChaChaPoly"` and `"AESGCM"` (case-sensitive). The name is resolved through the `CipherAlgos` table before any Botan call, so no other string reaches Botan's algorithm parser; Botan's own spellings (`"ChaCha20Poly1305"`, `"AES-256/GCM"`), truncated-tag variants (`"AES-256/GCM(8)"`) and other AEADs are rejected.
+
+**Throws**: `ProtocolNotSupportedError` for any other name; `NoiseError` if Botan cannot construct the AEAD (not expected with the two names). The copy constructor rebuilds the Botan objects from the stored `CipherAlgo`, so a copy has the same algorithm and the same nonce encoding.
+
+**Enum constructor**: `Cipher(CipherAlgo)` stores the enum directly after checking it against the `CipherAlgos` table; a value outside the table (for example `static_cast<CipherAlgo>(99)`) throws `ProtocolNotSupportedError`. The name constructor resolves the name and delegates to it, so both routes build the same object.
+
+**Key handling**: `Encrypt` and `Decrypt` take the key on every call, but the AEAD is re-keyed only when the key differs from the one last loaded (a constant-time compare of the cached 32 bytes), so a `CipherState` that encrypts a whole session with one key pays the AES key expansion and GHASH precompute, or the ChaCha key load, once. The cached copy is scrubbed by `Reset()`, by the destructor and when a `Cipher` is moved from; a copy starts with no cached key. A key that is not 32 bytes is rejected with `NoiseError` before `dst` is touched.
+
+**Note**: Internally `"ChaChaPoly"` maps to Botan's `"ChaCha20Poly1305"` and `"AESGCM"` to `"AES-256/GCM"`; the nonce byte order (big-endian for AES-GCM) follows the algorithm.
 
 ### Copy/Move Semantics
 
@@ -210,11 +221,15 @@ void Encrypt(
 - `ad`: Associated data (authenticated but not encrypted)
 - `plaintext`: Data to encrypt
 
-**Behavior**: Appends `plaintext.size() + 16` bytes to `dst` (ciphertext + 16-byte tag).
+**Behavior**: Appends `plaintext.size() + 16` bytes to `dst` (ciphertext + 16-byte tag). The body is encrypted in place in `dst` after one resize to the final length; only the tag passes through Botan's `finish`, so no whole-buffer copy is made.
+
+**Throws**: `NoiseError` if the cipher backend fails. On failure the scratch region `dst[offset, end)` (the plaintext copy) is scrubbed with `Botan::secure_scrub_memory` and `dst` is restored to its entry size.
 
 **Nonce Encoding**:
 - ChaCha20-Poly1305: 4 zero bytes + 8-byte little-endian counter
 - AES-GCM: 4 zero bytes + 8-byte big-endian counter
+
+The counter bytes are computed by shifting, not by reinterpreting the integer's memory, so the encoding is the same on every host regardless of its byte order; both layouts are pinned at compile time.
 
 #### Decrypt
 
@@ -230,7 +245,9 @@ void Decrypt(
 
 **Parameters**: Same as `Encrypt`, but takes ciphertext with tag and appends decrypted plaintext to `dst`.
 
-**Throws**: `Botan::Invalid_Authentication_Tag` on AEAD tag verification failure.
+**Behavior**: The body is decrypted in place in `dst` and the tag is verified separately, so no whole-buffer copy is made. Until the tag verifies, `dst[offset, end)` holds unauthenticated plaintext.
+
+**Throws**: `DecryptionError` if the ciphertext is shorter than the AEAD tag or the tag does not verify; `NoiseError` if the cipher backend fails for any other reason. On every failure the scratch region `dst[offset, end)` is scrubbed with `Botan::secure_scrub_memory` and `dst` is restored to its entry size, so the caller never sees unauthenticated plaintext.
 
 #### Utility Methods
 
@@ -265,6 +282,10 @@ CipherState& operator=(const CipherState&) = delete;  // No copy assignment
 CipherState& operator=(CipherState&&) = delete;       // No move assignment
 ```
 
+### Destructor
+
+`~CipherState()` scrubs `key` with `Botan::secure_scrub_memory`. A moved-from `CipherState` still holds its copy of the key (`std::array` moves copy) and scrubs it when it dies, so a transport key never outlives the object that held it: the application's copies, `HandshakeStatus::cipherStates`, and the temporaries inside `SymmetricState::Split()` are all scrubbed.
+
 ### Public Members
 
 ```cpp
@@ -290,7 +311,7 @@ void InitializeKey(std::span<const std::uint8_t> key);
 
 **Parameters**: `key` - 32-byte key data
 
-**Throws**: Error if `key.size() != 32`
+**Throws**: `NoiseError` if `key.size() != 32`
 
 **Behavior**: Tracks first key initialization via `hadKeyBefore` flag.
 
@@ -325,7 +346,7 @@ void SetNonce(std::uint64_t nonce);
 - If no key set: Returns plaintext unchanged (plaintext passthrough per Noise spec)
 - If key set: Returns ciphertext with 16-byte tag appended
 
-**Throws**: `NoiseError` if `nonce > MAX_NONCE`
+**Throws**: `NonceExhaustedError` if `nonce == MAX_NONCE` (2⁶⁴−1 is reserved, Noise spec Section 5.1); `MessageSizeError` if `plaintext.size()` plus the 16-byte tag (when a key is set) exceeds `maxMessageSize` (checked only when `maxMessageSize > 0`). The nonce is unchanged on failure.
 
 **Note**: A buffer-appending overload exists privately and is used by `SymmetricState` (which is a friend of `CipherState`).
 
@@ -344,21 +365,29 @@ void SetNonce(std::uint64_t nonce);
 - If no key set: Returns ciphertext unchanged (plaintext passthrough per Noise spec)
 - If key set: Returns decrypted plaintext
 
-**Throws**: `NoiseError` if `nonce > MAX_NONCE`; `Botan::Invalid_Authentication_Tag` on tag verification failure.
+**Throws**: `NonceExhaustedError` if `nonce == MAX_NONCE` (2⁶⁴−1 is reserved, Noise spec Section 5.1); `MessageSizeError` if `ciphertext.size()` exceeds `maxMessageSize` (checked only when `maxMessageSize > 0`); `DecryptionError` if the ciphertext is shorter than the tag or the tag does not verify. The nonce is unchanged on failure.
 
 #### Rekey
 
 ```cpp
-void Rekey(std::string_view hash_algo = "HKDF(SHA-256)");
+void Rekey();
 ```
 
-**Description**: Derives a new key from the current key using HKDF.
+**Description**: Replaces the key with the Noise spec Section 4.2 default REKEY:
 
-**Purpose**: Provides forward secrecy for long-lived connections.
+```
+REKEY(k) = ENCRYPT(k, 2⁶⁴−1, zerolen, zeros)[0..32)
+```
 
-**Behavior**: Does nothing if no key is set.
+that is, the first 32 bytes of encrypting 32 zero bytes under the current key with the reserved nonce 2⁶⁴−1 and empty associated data, using the `CipherState`'s own AEAD. Both peers must rekey at the same point in the message sequence; the derived key is the same on both sides because it depends only on `k` and the cipher.
 
-**Parameters**: `hash_algo` - KDF algorithm (default: HKDF with SHA-256)
+**Purpose**: Forward secrecy for long-lived connections.
+
+**Behavior**: The nonce is unchanged (Noise spec). Does nothing if no key is set. The temporary ciphertext is scrubbed with `Botan::secure_scrub_memory` on every path, including when the AEAD throws.
+
+**Throws**: `NoiseError` if the cipher backend fails; the key is unchanged.
+
+**Compatibility**: 1.0.0 derived the new key with HKDF, so a 1.0.0 peer and a 1.1.0 peer that rekey diverge. Both sides must run 1.1.0 or later.
 
 #### Reset
 
@@ -366,7 +395,7 @@ void Rekey(std::string_view hash_algo = "HKDF(SHA-256)");
 void Reset();
 ```
 
-**Description**: Securely wipes the key using `Botan::secure_scrub_memory` and resets cipher state.
+**Description**: Securely wipes the key using `Botan::secure_scrub_memory` and resets cipher state. The destructor scrubs the key as well, so `Reset()` is for a live object that is reused (for example `cs2` of a one-way pattern).
 
 **Note**: Does NOT reset nonce (by Noise spec design).
 
@@ -401,10 +430,13 @@ Hash hash3(SHA256);              // Using string constant
 Hash hash4("SHA512");            // Direct string
 ```
 
-**Note**: String names are mapped internally:
-- `"SHA256"` → `"SHA-256"` (Botan name)
-- `"SHA512"` → `"SHA-512"` (Botan name)
-- `"BLAKE2b"` and `"BLAKE2s"` pass through unchanged
+**Accepted names**: exactly the Noise names `"SHA256"`, `"SHA512"`, `"BLAKE2b"` and `"BLAKE2s"` (case-sensitive). The name is resolved through the `HashAlgos` table before any Botan call, so Botan spellings (`"SHA-256"`), parameterized forms (`"BLAKE2b(256)"`) and non-Noise hashes (`"MD5"`, `"SHA-3(256)"`) are rejected.
+
+**Throws**: `ProtocolNotSupportedError` for any other name, or if the constructed function's output length is neither 32 nor 64 bytes (HASHLEN, Noise spec Section 4.3; unreachable with the four names); `NoiseError` if Botan cannot construct the hash.
+
+**Enum constructor**: `Hash(HashAlgo)` stores the enum directly after checking it against the `HashAlgos` table; a value outside the table throws `ProtocolNotSupportedError`. The name constructor resolves the name and delegates to it.
+
+**Note**: Internally `"SHA256"` maps to Botan's `"SHA-256"`, `"SHA512"` to `"SHA-512"`; `"BLAKE2b"` and `"BLAKE2s"` are the same in both.
 
 ### Copy/Move Semantics
 
@@ -421,7 +453,7 @@ Hash& operator=(Hash&&) = delete;        // No move assignment
 std::unique_ptr<Botan::HashFunction> hash_function;  // Botan hash instance
 ```
 
-**Note**: Direct access to `hash_function` allows advanced usage with Botan's API.
+**Note**: Direct access to `hash_function` allows advanced usage with Botan's API. A `Hash` object is **not thread-safe**: `update`/`process`/`final` mutate the Botan object's internal buffer. The library never calls them on a `Protocol`'s `Hash` (each `SymmetricState` owns a clone), so sharing a `Protocol` across threads is safe unless the caller uses `hash_function` concurrently itself.
 
 ### Methods
 
@@ -496,6 +528,46 @@ struct KeyPair {
 
 **Note**: Keys are stored as raw bytes (not ASN.1 encoded).
 
+#### DhPrivateKey
+
+```cpp
+class DhPrivateKey {
+public:
+    DhPrivateKey(const DhPrivateKey&) = delete;             // Move-only
+    DhPrivateKey& operator=(const DhPrivateKey&) = delete;
+    DhPrivateKey(DhPrivateKey&&) noexcept = default;
+    DhPrivateKey& operator=(DhPrivateKey&&) noexcept = default;
+
+    KeyAlgo Algorithm() const noexcept;   // KeyAlgo::X25519 or KeyAlgo::X448
+private:
+    // Constructible only by Dh (LoadPrivateKey, GenerateKeypairWithKey)
+};
+```
+
+**Description**: A loaded X25519 or X448 private key, usable for many `DH()` calls. Botan derives the public key when it loads a raw scalar, which is one full scalar multiplication, the same cost as the agreement itself; `DH(my_raw_priv, peer_raw_pub)` therefore spends two multiplications per call. A handle is loaded once and reused, so each `DH(handle, peer)` costs one. `HandshakeState` keeps one handle for its ephemeral key and one for its static key, so every DH token of a handshake is a single multiplication (an XX side goes from 7 to 5, an IK initiator from 9 to 6).
+
+The handle exposes no key bytes. Botan zeroizes the key data when the last owner is destroyed; `HandshakeState::Reset()` drops its handles with the rest of the key material. A moved-from handle may only be destroyed or assigned to; don't pass it to `Dh`.
+
+#### KemPublicKey
+
+```cpp
+class KemPublicKey {
+public:
+    KemPublicKey(const KemPublicKey&) = delete;             // Move-only
+    KemPublicKey& operator=(const KemPublicKey&) = delete;
+    KemPublicKey(KemPublicKey&&) noexcept = default;
+    KemPublicKey& operator=(KemPublicKey&&) noexcept = default;
+
+    KeyAlgo Algorithm() const noexcept;   // KeyAlgo::M512, M768 or M1024
+private:
+    // Constructible only by Dh (LoadPublicKey)
+};
+```
+
+**Description**: A decoded ML-KEM public (encapsulation) key, usable for many `Encapsulate()` calls. Decoding an encapsulation key performs the FIPS 203 Section 7.2 check and expands the key's matrix from its seed, which is most of an encapsulation's cost at Noise message sizes. `Encapsulate(peer_public_key)` decodes on every call; `LoadPublicKey` decodes once and keeps the key, so each `Encapsulate(handle)` spends no decode. `HandshakeState` loads every ML-KEM key it receives (`e`, `s`, `e1`) this way at the `ReadMessage` that carries it, which is where the key is checked, so a received key is decoded exactly once per handshake; an application that encapsulates to a known server key repeatedly can load it once.
+
+The handle exposes no Botan type. A public key is not secret, so nothing is scrubbed when it is destroyed; `HandshakeState::Reset()` drops its handles with the rest of the handshake state. A moved-from handle may only be destroyed or assigned to; don't pass it to `Dh`.
+
 ### Constructors
 
 ```cpp
@@ -522,6 +594,8 @@ Dh kem3("M1024");            // ML-KEM-1024
 
 **Note**: String names `"25519"` and `"448"` map to Botan names `"X25519"` and `"X448"`. KEM names `"M512"`, `"M768"`, `"M1024"` map to `"ML-KEM-512"`, etc.
 
+**Enum constructor**: `Dh(KeyAlgo)` stores the enum directly after checking it against the `KeyAlgos` table; a value outside the table throws `ProtocolNotSupportedError`. The name constructor resolves the name through the same table and delegates to it.
+
 ### Copy/Move Semantics
 
 ```cpp
@@ -545,7 +619,66 @@ KeyPair GenerateKeypair() const;
 - X25519: 32 bytes for both private and public keys
 - X448: 56 bytes for both private and public keys
 
+**Throws**: `NoiseError` if the key generation backend fails.
+
 **Thread Safety**: Uses `Botan::System_RNG` which is thread-safe.
+
+#### GenerateKeypairWithKey
+
+```cpp
+std::pair<KeyPair, DhPrivateKey> GenerateKeypairWithKey() const;
+```
+
+**Description**: Generates a fresh DH keypair and returns it together with its loaded key object. The public key is derived once, at generation, and the handle is built from the same key object, so no second multiplication is spent on loading it. `HandshakeState` uses this for the ephemeral key it generates at the `e` token.
+
+**Returns**: The raw `KeyPair` (as `GenerateKeypair()`) and the `DhPrivateKey` for the same key.
+
+**Throws**: `NoiseError` if called on a KEM algorithm, or if the key generation backend fails.
+
+#### LoadPrivateKey
+
+```cpp
+DhPrivateKey LoadPrivateKey(std::span<const std::uint8_t> my_raw_priv) const;
+```
+
+**Description**: Loads a raw private scalar into a reusable key object (one scalar multiplication, to derive the public key). Use it for a key that takes part in more than one agreement, such as a static key.
+
+**Parameters**: `my_raw_priv` - Raw private scalar (32 bytes for X25519, 56 for X448)
+
+**Returns**: A move-only `DhPrivateKey` for `DH(const DhPrivateKey&, peer)`.
+
+**Throws**: `NoiseError` if called on a KEM algorithm, if `my_raw_priv` has the wrong length, or if the key backend fails for any other reason. A length error is never reported as `InvalidPublicKeyError`.
+
+#### DH (loaded-key version)
+
+```cpp
+std::vector<std::uint8_t> DH(
+    const DhPrivateKey& my_key,
+    std::span<const std::uint8_t> peer_raw_pub
+) const;
+```
+
+**Description**: Performs Diffie-Hellman key agreement with a loaded key: one scalar multiplication.
+
+**Parameters**:
+- `my_key`: A handle from `LoadPrivateKey()` or `GenerateKeypairWithKey()` of a `Dh` with the same algorithm
+- `peer_raw_pub`: Peer's public key (32 or 56 bytes)
+
+**Returns**: Shared secret (same size as keys)
+
+**Throws**:
+- `InvalidPublicKeyError` if `peer_raw_pub` has the wrong length for the algorithm, or is a low-order point (the shared secret would be all zeros, RFC 7748 Section 6)
+- `NoiseError` if called on a KEM algorithm, if `my_key` belongs to another algorithm, or if the key agreement backend fails for any other reason
+
+**Example**:
+```cpp
+Dh dh(KeyAlgo::X25519);
+auto myStatic = dh.GenerateKeypair();
+const DhPrivateKey loaded = dh.LoadPrivateKey(myStatic.private_key);   // once
+for (const auto& peer : peers) {
+    auto shared = dh.DH(loaded, peer.public_key);                       // one multiplication each
+}
+```
 
 #### DH (span version)
 
@@ -556,7 +689,7 @@ std::vector<std::uint8_t> DH(
 ) const;
 ```
 
-**Description**: Performs Diffie-Hellman key agreement.
+**Description**: Performs Diffie-Hellman key agreement from a raw scalar. It loads the scalar (one multiplication, see `LoadPrivateKey`) and agrees (another); for a key used more than once, load it once and call the loaded-key version.
 
 **Parameters**:
 - `my_raw_priv`: Your private key (32 or 56 bytes)
@@ -564,7 +697,11 @@ std::vector<std::uint8_t> DH(
 
 **Returns**: Shared secret (same size as keys)
 
-**Throws**: `NoiseError` if called on a KEM algorithm or key sizes don't match.
+**Throws**:
+- `InvalidPublicKeyError` if `peer_raw_pub` has the wrong length for the algorithm, or is a low-order point (the shared secret would be all zeros, RFC 7748 Section 6)
+- `NoiseError` if called on a KEM algorithm, if `my_raw_priv` has the wrong length, or if the key agreement backend fails for any other reason
+
+**Note (low-order points)**: X25519/X448 public keys are not screened on receipt. `HandshakeState` detects a low-order remote key at the DH token that uses it, which may be in the `ReadMessage` that carried the key (`ee` in `<- e, ee`) or in the next `WriteMessage` (e.g. a pre-message static used by `es`/`ss`). The Noise spec Section 4.1 allows the error at DH time. ML-KEM keys, by contrast, are validated by the `ReadMessage` that carries them (see `ValidatePublicKey`).
 
 #### DH (KeyPair version)
 
@@ -625,6 +762,46 @@ bool IsKEM() const;
 
 **Returns**: `true` if this is a KEM algorithm (M512, M768, M1024), `false` for DH algorithms
 
+#### LoadPublicKey (KEM only)
+
+```cpp
+KemPublicKey LoadPublicKey(std::span<const std::uint8_t> peer_public_key) const;
+```
+
+**Description**: Loads a peer's ML-KEM encapsulation key into a reusable `KemPublicKey`. It performs exactly `ValidatePublicKey`'s checks (the length, then the FIPS 203 Section 7.2 decode) and keeps the decoded key instead of discarding it.
+
+**Parameters**: `peer_public_key` - Peer's KEM public key (800/1184/1568 bytes)
+
+**Returns**: A move-only `KemPublicKey` for `Encapsulate(const KemPublicKey&)`.
+
+**Throws**:
+- `InvalidPublicKeyError` if `peer_public_key` has the wrong length or fails the FIPS 203 Section 7.2 encapsulation-key check (a coefficient >= q)
+- `NoiseError` if called on a DH algorithm
+
+#### Encapsulate (loaded key, KEM only)
+
+```cpp
+std::pair<std::vector<std::uint8_t>, std::vector<std::uint8_t>>
+Encapsulate(const KemPublicKey& peer_public_key) const;
+```
+
+**Description**: Performs KEM encapsulation to a loaded key, without decoding it again.
+
+**Parameters**: `peer_public_key` - A handle from `LoadPublicKey()` of a `Dh` with the same algorithm
+
+**Returns**: Pair of {ciphertext, shared_secret}, as `Encapsulate(span)`
+
+**Throws**: `NoiseError` if called on a DH algorithm, if the handle belongs to another algorithm (checked first, so it is never reported as an invalid public key), or if the encapsulation backend fails for any other reason
+
+**Example**:
+```cpp
+Dh kem(KeyAlgo::M768);
+const KemPublicKey server = kem.LoadPublicKey(serverEncapsulationKey);   // once: checked and decoded
+for (...) {
+    auto [ciphertext, sharedSecret] = kem.Encapsulate(server);          // no decode per call
+}
+```
+
 #### Encapsulate (KEM only)
 
 ```cpp
@@ -632,7 +809,7 @@ std::pair<std::vector<std::uint8_t>, std::vector<std::uint8_t>>
 Encapsulate(std::span<const std::uint8_t> peer_public_key) const;
 ```
 
-**Description**: Performs KEM encapsulation using the peer's public key.
+**Description**: Performs KEM encapsulation using the peer's public key. It decodes the key (`LoadPublicKey`) and encapsulates to it; for a key used more than once, load it once and call the loaded-key version.
 
 **Parameters**: `peer_public_key` - Peer's KEM public key (800/1184/1568 bytes)
 
@@ -640,7 +817,9 @@ Encapsulate(std::span<const std::uint8_t> peer_public_key) const;
 - `ciphertext` - Encapsulated key (768/1088/1568 bytes)
 - `shared_secret` - Derived 32-byte shared secret
 
-**Throws**: `NoiseError` if called on a DH algorithm.
+**Throws**:
+- `InvalidPublicKeyError` if `peer_public_key` has the wrong length or fails the FIPS 203 Section 7.2 encapsulation-key check (a coefficient >= q)
+- `NoiseError` if called on a DH algorithm, or if the encapsulation backend fails for any other reason
 
 **Example**:
 ```cpp
@@ -666,7 +845,7 @@ std::vector<std::uint8_t> Decapsulate(
 
 **Returns**: 32-byte shared secret (matches the sender's shared secret)
 
-**Throws**: `NoiseError` if called on a DH algorithm.
+**Throws**: `NoiseError` if called on a DH algorithm, if `ciphertext` is not `CiphertextSize()` bytes, if `private_key` does not decode, or if the decapsulation backend fails for any other reason. An invalid but well-formed ciphertext does not throw: ML-KEM's implicit rejection returns a pseudorandom secret instead.
 
 **Example**:
 ```cpp
@@ -674,6 +853,32 @@ Dh kem(KeyAlgo::M768);
 auto bobKeys = kem.GenerateKeypair();
 // ... receive ciphertext from Alice ...
 auto sharedSecret = kem.Decapsulate(bobKeys.private_key, ciphertext);
+```
+
+#### ValidatePublicKey
+
+```cpp
+void ValidatePublicKey(std::span<const std::uint8_t> key) const;
+```
+
+**Description**: Validates a peer public key for this algorithm without keeping any key object.
+- DH (X25519, X448): checks the length only. A low-order point is detected by `DH()` (see the note under `DH`).
+- ML-KEM: checks the length, then decodes the encapsulation key, which performs the FIPS 203 Section 7.2 modulus check on every coefficient.
+
+`HandshakeState::ReadMessage` performs the same checks on every ML-KEM key it receives (`e`, `s`, `e1`), through `LoadPublicKey`, before the key is stored, passed to the observer, or mixed into the handshake hash, so a malformed key fails the message that carries it; the decoded key is kept for the `ekem`/`skem`/`ekem1` token that encapsulates to it. Pre-message keys from `HandshakeConfig` are not validated at construction; an invalid one fails at the first token that encapsulates to it with the same error.
+
+**Parameters**: `key` - Raw public key bytes (`PublicKeySize()` bytes expected)
+
+**Throws**: `InvalidPublicKeyError` if the length is wrong for the algorithm, or an ML-KEM key fails the FIPS 203 check.
+
+**Example**:
+```cpp
+Dh kem(KeyAlgo::M768);
+try {
+    kem.ValidatePublicKey(peerEncapsulationKey);
+} catch (const InvalidPublicKeyError&) {
+    // reject the peer
+}
 ```
 
 #### String
@@ -718,14 +923,22 @@ Hash hash(SHA256);
 SymmetricState ss(cipher, hash);
 ```
 
+`cipher` builds the embedded `CipherState` (its own copy of the cipher); `hash` is cloned (`Botan::HashFunction::new_object()`) and the `SymmetricState` owns the clone. Neither argument is retained by reference, so the `Protocol` they usually come from is never mutated by a handshake and may be shared across threads (see Thread Safety).
+
 ### Copy/Move Semantics
 
 ```cpp
-SymmetricState(const SymmetricState&) = default;         // Copy constructor
+SymmetricState(const SymmetricState&);                   // Copy constructor (the copy owns a fresh hash clone)
 SymmetricState(SymmetricState&&) noexcept;              // Move constructor
 SymmetricState& operator=(const SymmetricState&) = delete;  // No copy assignment
 SymmetricState& operator=(SymmetricState&&) = delete;       // No move assignment
 ```
+
+A moved-from `SymmetricState` may only be destroyed: the move takes its hash and HMAC objects. Copying a moved-from state throws `NoiseError` (`noisepqc++/SymmetricState: copy of a moved-from state`).
+
+### Destructor
+
+`~SymmetricState()` scrubs the chaining key `ck` with `Botan::secure_scrub_memory` (the embedded `CipherState` scrubs its own key). `h` is the public transcript hash and is left as is. Inside a handshake, `HandshakeState::Reset()` scrubs and clears `ck` earlier, at completion.
 
 ### Public Members
 
@@ -743,10 +956,10 @@ std::size_t hashLen;                     // Hash output length (32 or 64)
 #### InitializeSymmetric
 
 ```cpp
-void InitializeSymmetric(std::span<const std::uint8_t> protocolName);
+void InitializeSymmetric(std::string_view protocolName);
 ```
 
-**Description**: Initializes symmetric state with the protocol name.
+**Description**: Initializes symmetric state with the protocol name, passed as text (a Noise protocol name is an ASCII string, Noise spec Section 8). A `std::string` or a string literal converts to `std::string_view`.
 
 **Behavior**:
 - If `protocolName.size() <= hashLen`: Copy directly to `h`, zero-pad if needed
@@ -756,11 +969,7 @@ void InitializeSymmetric(std::span<const std::uint8_t> protocolName);
 
 **Example**:
 ```cpp
-std::string protoName = "Noise_XX_25519_ChaChaPoly_SHA256";
-ss.InitializeSymmetric(std::span<const uint8_t>(
-    reinterpret_cast<const uint8_t*>(protoName.data()),
-    protoName.size()
-));
+ss.InitializeSymmetric("Noise_XX_25519_ChaChaPoly_SHA256");
 ```
 
 #### MixKey
@@ -832,9 +1041,7 @@ void DecryptAndHash(
 );
 ```
 
-**Description**: Mixes ciphertext into hash BEFORE decryption, then decrypts and appends to `dst`.
-
-**Critical Detail**: Uses saved copy of `h` as AD for decryption (since `h` is modified before decryption).
+**Description**: Decrypts `ciphertext` with `h` as AD and appends the plaintext to `dst`, then mixes the ciphertext into `h`.
 
 #### GetHandshakeHash
 
@@ -913,11 +1120,26 @@ Protocol proto4("Noise_XXhfs_25519+M768_ChaChaPoly_SHA256");
 - `"Noise_XXhfs_25519+M768_ChaChaPoly_SHA256"` - HFS with X25519 + ML-KEM-768
 - `"Noise_XXhfs_448+M1024_AESGCM_SHA512"` - HFS with X448 + ML-KEM-1024
 
+**Accepted names**: every field is checked at construction, in both the string and the component constructors:
+- `PATTERN`: a name in the pattern registry (`GetPatternRegistry()`). HFS names are looked up in full: the 35 registered `hfs` patterns are the 12 fundamental interactive patterns (`NNhfs` … `IXhfs`) and the 23 deferred ones (`NK1hfs`, `NX1hfs`, `X1Nhfs`, `X1Khfs`, `XK1hfs`, `X1K1hfs`, `X1Xhfs`, `XX1hfs`, `X1X1hfs`, `K1Nhfs`, `K1Khfs`, `KK1hfs`, `K1K1hfs`, `K1Xhfs`, `KX1hfs`, `K1X1hfs`, `I1Nhfs`, `I1Khfs`, `IK1hfs`, `I1K1hfs`, `I1Xhfs`, `IX1hfs`, `I1X1hfs`). No other `hfs` name is derived at parse time (`Nhfs`, `NNpsk0hfs`, `pqXXhfs` are rejected).
+- `DH` / `KEM`: `25519`, `448`, `M512`, `M768`, `M1024` (see `Dh`).
+- `CIPHER`: `ChaChaPoly`, `AESGCM` (see `Cipher`).
+- `HASH`: `SHA256`, `SHA512`, `BLAKE2b`, `BLAKE2s` (see `Hash`).
+
+**Combination rules**: the pattern's tokens must match the algorithms, or construction throws `ProtocolNotSupportedError`:
+- `ee`/`es`/`se`/`ss` present ⇒ the DH field is X25519 or X448 (`Noise_XX_M768_…` is rejected);
+- `ekem`/`skem` present ⇒ the DH field is an ML-KEM (`Noise_pqXX_25519_…` is rejected);
+- `e1`/`ekem1` present ⇔ a KEM is given (HFS constructor or `DH+KEM`), and then the primary is a DH and the secondary an ML-KEM (`Noise_XXhfs_25519+448_…`, `Noise_XXhfs_M768+M768_…`, and `Protocol(XX, "25519", "M768", …)` are rejected).
+
+Before 1.1.0 these combinations constructed and failed one or two messages into the handshake.
+
+**Throws**: `ProtocolNotSupportedError` for an unknown or malformed name (including a `DH+KEM` field without an `hfs` pattern, or the reverse), an unregistered pattern, or an incompatible combination; `NoiseError` if Botan cannot construct an algorithm.
+
 ### Public Members
 
 ```cpp
 const HandshakePattern pattern;  // Handshake pattern (XX, pqXX, XXhfs, etc.)
-const Dh dh;                     // DH algorithm (X25519 or X448)
+const Dh dh;                     // Primary DH (X25519, X448) or, for pq patterns, the ML-KEM
 const std::optional<Dh> kem;     // KEM algorithm (M512, M768, M1024) - for HFS only
 const Cipher cipher;             // AEAD cipher (ChaCha20-Poly1305 or AES-GCM)
 const Hash hash;                 // Hash function (SHA-256, SHA-512, BLAKE2b, BLAKE2s)
@@ -930,10 +1152,10 @@ const Hash hash;                 // Hash function (SHA-256, SHA-512, BLAKE2b, BL
 #### String
 
 ```cpp
-std::string String() const;
+const std::string& String() const;
 ```
 
-**Returns**: Full protocol name in Noise specification format.
+**Returns**: Full protocol name in Noise specification format. The name is built once, when the `Protocol` is constructed, and `String()` returns a reference to that cached string (no allocation per call; `std::string result = proto.String();` still copies as before).
 
 **Examples**:
 - `"Noise_XX_25519_ChaChaPoly_SHA256"`
@@ -960,7 +1182,7 @@ To access pattern details:
 Protocol proto("Noise_XX_25519_ChaChaPoly_SHA256");
 
 // Get pattern name
-std::string patternName = proto.pattern.String();  // "XX"
+std::string_view patternName = proto.pattern.String();  // "XX"
 
 // Check if pattern has PSK
 bool hasPsk = proto.pattern.numPSKs > 0;
@@ -980,10 +1202,10 @@ Defines handshake patterns and message flows according to the Noise Protocol spe
 **NoisePQC++ implements all Noise patterns including PQ and HFS**:
 - 3 one-way patterns (N, K, X)
 - 12 fundamental interactive patterns (NN, NK, NX, etc.)
-- 21 deferred patterns (with "1" suffix)
+- 23 deferred patterns (with "1" suffix)
 - 21 PSK patterns (with "psk" modifier)
 - 13 Post-Quantum patterns (pqN, pqNN, pqNK, pqXX, etc.)
-- 12+ HFS patterns (NNhfs, NKhfs, XXhfs, etc.)
+- 35 HFS patterns (12 interactive + 23 deferred: NNhfs, XXhfs, XX1hfs, etc.)
 
 For complete pattern details, see [PatternGuide.md](PatternGuide.md).
 
@@ -995,7 +1217,7 @@ struct HandshakePattern {
     std::vector<Token> pre_initiator;       // Initiator's pre-message tokens
     std::vector<Token> pre_responder;       // Responder's pre-message tokens
     std::vector<MessagePattern> messages;   // Ordered handshake message sequences
-    bool isOneWay{false};                   // True for one-way patterns (N, K, X)
+    bool isOneWay{false};                   // True for one-way patterns (N, K, X, pqN)
     std::uint8_t numPSKs{};                 // Number of pre-shared keys required
 
     [[nodiscard]] std::string_view String() const;
@@ -1086,6 +1308,12 @@ struct MessagePattern {
 ```
 -> e, es, ss
 <- e, ee, se
+```
+
+**KX Pattern** (pre-message: `-> s`):
+```
+-> e
+<- e, ee, se, s, es
 ```
 
 **IN Pattern**:
@@ -1184,8 +1412,14 @@ Current status of the handshake.
 ```cpp
 class HandshakeStatus {
 public:
-    // Error status (nullptr = in progress, HandshakeDoneError = complete, other = failure)
+    // Progress of the handshake, kept in step with err
+    enum class State : std::uint8_t { InProgress, Done, Failed };
+
+    // Error status (nullptr = in progress, HandshakeComplete = complete, other = failure)
     std::exception_ptr err{nullptr};
+
+    // InProgress until the final message is processed, then Done; Failed after any error
+    State state{State::InProgress};
 
     // Public keys discovered during handshake
     PublicKey localEphemeral{};
@@ -1198,16 +1432,17 @@ public:
     // Handshake hash (set on completion)
     std::vector<std::uint8_t> handshakeHash{};
 
-    [[nodiscard]] bool IsComplete() const;
-    [[nodiscard]] bool HasError() const;
+    [[nodiscard]] bool IsComplete() const noexcept;
+    [[nodiscard]] bool HasError() const noexcept;
 };
 ```
 
 **Fields:**
 
+- **`state`**: Progress of the handshake: `InProgress` until the final message has been written or read, `Done` after it, `Failed` after any error. The library sets `state` and `err` together, so they never disagree: `InProgress` ↔ `err == nullptr`, `Done` ↔ `err` holds a `HandshakeComplete`, `Failed` ↔ `err` holds the failure
 - **`err`**: Exception pointer indicating handshake state:
   - `nullptr` = handshake in progress
-  - `HandshakeDoneError` = handshake completed successfully
+  - `HandshakeComplete` = handshake completed successfully
   - Any other exception = handshake failed
 - **`localEphemeral`**: Your ephemeral public key (set after first message with `e` token)
 - **`remoteStatic`**: Peer's static public key (set when received or from config)
@@ -1215,13 +1450,14 @@ public:
 - **`cipherStates`**: Transport cipher states after completion (`cs1`, `cs2`)
   - Initiator: `cs1` for sending, `cs2` for receiving
   - Responder: `cs1` for receiving, `cs2` for sending
-  - One-way patterns: Only `cs1` is valid (cs2 is cleared)
+  - One-way patterns: Only `cs1` is valid. `cs2` is cleared and has no key, so `EncryptWithAd`/`DecryptWithAd` on it pass data through **unencrypted** (Noise spec Section 5.1, the unkeyed CipherState). Never use it to send
+  - Empty again after `HandshakeState::TakeCipherStates()` has moved them out
 - **`handshakeHash`**: Final handshake hash (available after completion)
 
 **Methods:**
 
-- **`IsComplete()`**: Returns `true` if handshake completed successfully (err is HandshakeDoneError)
-- **`HasError()`**: Returns `true` if handshake failed with an error (err is not nullptr and not HandshakeDoneError)
+- **`IsComplete()`**: Returns `true` if the handshake completed successfully (`state == State::Done`). Never throws
+- **`HasError()`**: Returns `true` if the handshake failed with an error (`state == State::Failed`). Never throws
 
 ### HandshakeObserver
 
@@ -1244,7 +1480,7 @@ public:
 **Purpose**: Allows real-time validation of peer public keys during handshake.
 
 **Callback Parameters:**
-- **`token`**: The token type (`Token::Token_e` for ephemeral, `Token::Token_s` for static)
+- **`token`**: The token type (`Token::Token_e` ephemeral, `Token::Token_s` static, `Token::Token_e1` HFS KEM ephemeral)
 - **`pubKey`**: The peer's public key being received
 
 **Return Value:**
@@ -1261,10 +1497,11 @@ public:
 
 ```cpp
 explicit HandshakeState(const HandshakeConfig& cfg);
+explicit HandshakeState(HandshakeConfig&&) = delete;   // a temporary config would dangle
 ```
 
 **Parameters:**
-- **`cfg`**: Handshake configuration (protocol, role, keys, observer, etc.)
+- **`cfg`**: Handshake configuration (protocol, role, keys, observer, etc.). The state keeps a reference to it, so `cfg`, and the `Protocol` it refers to, must outlive the `HandshakeState`. Passing a temporary (`HandshakeState hs{HandshakeConfig{…}};`) does not compile.
 
 **Throws:**
 - `MissingPSKError`: If number of PSKs doesn't match `protocol.pattern.numPSKs`
@@ -1280,7 +1517,7 @@ explicit HandshakeState(const HandshakeConfig& cfg);
 
 **Notes:**
 - HandshakeState is non-copyable and non-movable
-- Stores reference to config - config must outlive HandshakeState
+- Stores a reference to the config: the config, and the `Protocol` it refers to, must outlive the HandshakeState. The rvalue overload is deleted, so a temporary config is a compile error
 - Automatically handles pre-messages based on pattern
 
 ### Methods
@@ -1302,26 +1539,26 @@ std::vector<std::uint8_t> WriteMessage(std::span<const std::uint8_t> payload);
 - `OutOfOrderError`: If called when it's the peer's turn to write
 - `MessageSizeError`: If message exceeds `maxMessageSize`
 - `MissingKeyError`: If required key (e.g., static) is not available
+- `InvalidPublicKeyError`: If a DH token uses a low-order remote key, or a KEM token encapsulates to an invalid pre-message key from `HandshakeConfig`
 - `InvalidTokenError`: If pattern contains invalid token
-- `HandshakeDoneError`: When handshake completes (after returning final message)
-- Any error from observer's `OnPeerPublicKey` (if observer returns error)
+- `HandshakeComplete`: On any call after the handshake has completed (the completing call itself returns the final message normally)
 
 **Behavior:**
 1. Checks for existing errors or out-of-order calls
-2. Processes pattern tokens (e, s, ee, es, se, ss, psk) for current message
+2. Processes pattern tokens (e, s, ee, es, se, ss, psk, and the KEM tokens ekem, skem, e1, ekem1) for current message
 3. Auto-generates ephemeral key if needed (first `e` token)
 4. Encrypts payload using `SymmetricState.EncryptAndHash`
 5. If last message in pattern, completes handshake:
    - Splits symmetric state into `cs1` and `cs2`
    - Sets `cipherStates` in status
    - Sets `handshakeHash` in status
-   - Clears sensitive data via `Reset()`
-   - Throws `HandshakeDoneError` (after returning message)
+   - Scrubs the handshake's secret material via `Reset()` (see below)
+   - Sets `state` to `Done` and stores a `HandshakeComplete` in `err`; nothing is thrown, the message is returned
 
 **Notes:**
 - Call alternates with `ReadMessage` based on pattern
 - Initiator always writes first message (for non-one-way patterns)
-- After completion, use `GetStatus().cipherStates` for transport encryption
+- After completion, take the transport states with `TakeCipherStates()` (or copy `GetStatus().cipherStates`)
 
 #### ReadMessage
 
@@ -1340,16 +1577,17 @@ std::vector<std::uint8_t> ReadMessage(std::span<const std::uint8_t> message);
 - `OutOfOrderError`: If called when it's your turn to write
 - `MessageSizeError`: If message exceeds `maxMessageSize`
 - `TruncatedMessageError`: If message is too short for expected tokens
-- `DecryptError`: If authentication fails during `DecryptAndHash`
+- `DecryptionError`: If authentication fails during `DecryptAndHash`
+- `InvalidPublicKeyError`: If a received ML-KEM key (`e`, `s`, `e1`) fails the FIPS 203 Section 7.2 check, or a DH token in this message uses a low-order remote key
 - `NoiseError`: If observer rejects a peer public key
-- `HandshakeDoneError`: When handshake completes (after returning payload)
+- `HandshakeComplete`: On any call after the handshake has completed (the completing call itself returns the payload normally)
 
 **Behavior:**
 1. Checks message size and turn order
 2. Processes pattern tokens for current message:
-   - Reads `e` token: Extracts peer ephemeral key, calls observer if present
-   - Reads `s` token: Decrypts and extracts peer static key, calls observer if present
-   - Processes DH tokens (ee, es, se, ss)
+   - Reads `e` token: Extracts peer ephemeral key (an ML-KEM key is validated first and kept decoded for `ekem`), calls observer if present
+   - Reads `s` token: Decrypts and extracts peer static key (an ML-KEM key is validated first and kept decoded for `skem`), calls observer if present
+   - Processes DH tokens (ee, es, se, ss) and the KEM tokens (ekem, skem, e1, ekem1)
    - Processes PSK tokens if applicable
 3. Decrypts payload using `SymmetricState.DecryptAndHash`
 4. If last message in pattern, completes handshake (same as WriteMessage)
@@ -1357,7 +1595,7 @@ std::vector<std::uint8_t> ReadMessage(std::span<const std::uint8_t> message);
 **Notes:**
 - Peer public keys are available in status immediately after extraction
 - Observer is called synchronously before continuing handshake
-- Authentication failure throws `DecryptError` (MAC verification failed)
+- Authentication failure throws `DecryptionError` (MAC verification failed)
 
 #### GetStatus
 
@@ -1374,10 +1612,35 @@ std::vector<std::uint8_t> ReadMessage(std::span<const std::uint8_t> message);
 - Handshake hash (if complete)
 
 **Use Cases:**
-- Check completion: `GetStatus().IsComplete()`
+- Check completion: `GetStatus().IsComplete()` (reads `state`; never throws)
 - Check for errors: `GetStatus().HasError()`
 - Access peer keys: `GetStatus().remoteStatic`
-- Get transport ciphers: `GetStatus().cipherStates`
+- Get transport ciphers: `GetStatus().cipherStates` (a copy), or move them out with `TakeCipherStates()`
+
+#### TakeCipherStates
+
+```cpp
+[[nodiscard]] std::optional<std::pair<CipherState, CipherState>> TakeCipherStates() noexcept;
+```
+
+**Purpose**: Moves the two transport `CipherState` objects out of the status after completion.
+
+**Returns**: The `(cs1, cs2)` pair (the `Split()` output: `cs1` for initiator→responder, `cs2` for responder→initiator), or `std::nullopt` before completion or on a second call.
+
+**Behavior:**
+- Afterwards `GetStatus().cipherStates` is empty; `GetStatus().state`, `IsComplete()` and `handshakeHash` are unchanged
+- No copy: copying `GetStatus().cipherStates` instead constructs two more AEAD objects per side
+
+**Example:**
+
+```cpp
+if (aliceHs.GetStatus().IsComplete()) {
+    auto states = aliceHs.TakeCipherStates();   // std::optional<std::pair<CipherState, CipherState>>
+    auto& [aliceTx, aliceRx] = *states;          // initiator: cs1 sends, cs2 receives
+    auto ciphertext = aliceTx.EncryptWithAd({}, plaintext);
+    // aliceHs.GetStatus().cipherStates is now empty; aliceHs.TakeCipherStates() returns std::nullopt
+}
+```
 
 #### GetSymmetricState
 
@@ -1423,12 +1686,15 @@ std::vector<std::uint8_t> ReadMessage(std::span<const std::uint8_t> message);
 void Reset();
 ```
 
-**Purpose**: Clears all sensitive handshake state (automatically called on completion).
+**Purpose**: Scrubs the library's own copies of the handshake's secret material (automatically called on completion and by the destructor).
 
 **Behavior:**
-- Clears symmetric state (chaining key, handshake hash)
-- Securely erases ephemeral private key (if generated)
-- Clears cipher state
+- Scrubs the chaining key `ck` with `Botan::secure_scrub_memory`, then clears it; clears the handshake hash `h`; resets the embedded `CipherState` (its key is scrubbed)
+- Scrubs the private key of all three local keypairs and empties them: the library's copies of `localStatic` and `localEphemeral`, whether they came from the `HandshakeConfig` or were generated, and the HFS `e1` decapsulation key
+- Never reads or modifies the caller's `HandshakeConfig`
+- Idempotent: safe to call again after completion
+
+Shared secrets (`ee`, `es`, `se`, `ss`, `ekem`, `skem`, `ekem1`) do not wait for `Reset()`: each token handler scrubs its shared secret as soon as it has been mixed into the `SymmetricState`, also when the handler exits by exception.
 
 **Note**: Typically not called manually - automatically invoked on handshake completion or destruction.
 
@@ -1458,7 +1724,8 @@ HandshakeState bobHs(bobCfg);
 
 // Handshake flow (XX pattern)
 // Message 1: Alice -> Bob
-auto msg1 = aliceHs.WriteMessage({'h','e','l','l','o'});
+std::vector<std::uint8_t> hello{'h', 'e', 'l', 'l', 'o'};
+auto msg1 = aliceHs.WriteMessage(hello);
 auto recv1 = bobHs.ReadMessage(msg1);
 
 // Message 2: Bob -> Alice
@@ -1471,9 +1738,11 @@ auto recv3 = bobHs.ReadMessage(msg3);
 
 // Check completion
 if (aliceHs.GetStatus().IsComplete() && bobHs.GetStatus().IsComplete()) {
-    // Get transport cipher states
-    auto [aliceTx, aliceRx] = *aliceHs.GetStatus().cipherStates;
-    auto [bobRx, bobTx] = *bobHs.GetStatus().cipherStates;
+    // Take the transport cipher states (moved out of the HandshakeState, not copied)
+    auto aliceStates = aliceHs.TakeCipherStates();   // std::optional<std::pair<CipherState, CipherState>>
+    auto& [aliceTx, aliceRx] = *aliceStates;          // initiator: cs1 sends, cs2 receives
+    auto bobStates = bobHs.TakeCipherStates();
+    auto& [bobRx, bobTx] = *bobStates;                // responder: cs1 receives, cs2 sends
 
     // Use for post-handshake encryption
     auto ciphertext = aliceTx.EncryptWithAd({}, plaintext);
@@ -1535,12 +1804,10 @@ Hash hash(SHA256);
 SymmetricState init_ss(cipher, hash);
 SymmetricState resp_ss(cipher, hash);
 
-// Initialize with protocol name as a byte span
-std::string protocol = "Noise_XX_25519_ChaChaPoly_SHA256";
-std::span<const std::uint8_t> protoBytes(
-    reinterpret_cast<const std::uint8_t*>(protocol.data()), protocol.size());
-init_ss.InitializeSymmetric(protoBytes);
-resp_ss.InitializeSymmetric(protoBytes);
+// Initialize with the protocol name (std::string_view)
+const std::string protocol = "Noise_XX_25519_ChaChaPoly_SHA256";
+init_ss.InitializeSymmetric(protocol);
+resp_ss.InitializeSymmetric(protocol);
 
 // Perform handshake...
 // (See tests/test_symmetricstate.cpp for complete example)
@@ -1692,18 +1959,24 @@ HandshakeConfig bobCfg{
 HandshakeState bobHs(bobCfg);
 
 // Single message completes handshake
-auto msg = aliceHs.WriteMessage({'h','e','l','l','o'});
+std::vector<std::uint8_t> hello{'h', 'e', 'l', 'l', 'o'};
+auto msg = aliceHs.WriteMessage(hello);
 auto payload = bobHs.ReadMessage(msg);
 
 // Only one transport key is valid (cs1)
-auto [aliceTx, _] = *aliceHs.GetStatus().cipherStates;
-auto [bobRx, __] = *bobHs.GetStatus().cipherStates;
+auto aliceStates = aliceHs.TakeCipherStates();   // std::optional<std::pair<CipherState, CipherState>>
+auto& [aliceTx, _] = *aliceStates;                // initiator: cs1 sends; cs2 is reset (one-way)
+auto bobStates = bobHs.TakeCipherStates();
+auto& [bobRx, __] = *bobStates;                   // responder: cs1 receives; cs2 is reset (one-way)
 
 // Alice can send encrypted messages to Bob
-auto encrypted = aliceTx.EncryptWithAd({}, {'d','a','t','a'});
+std::vector<std::uint8_t> data{'d', 'a', 't', 'a'};
+auto encrypted = aliceTx.EncryptWithAd({}, data);
 auto decrypted = bobRx.DecryptWithAd({}, encrypted);
 
-// Note: Bob cannot send encrypted messages back (one-way)
+// Note: Bob cannot send encrypted messages back (one-way). The second state of each pair
+// (cs2) has no key: EncryptWithAd/DecryptWithAd on it pass data through unencrypted, so it
+// must never be used to send.
 ```
 
 ### Protocol String Parsing Example
@@ -1728,7 +2001,7 @@ std::println("Hash: SHA256, Output size: {}", protocol1.hash.Size());  // 32
 
 ## Error Handling
 
-NoisePQC++ uses exceptions for error reporting. All NoisePQC++-specific exceptions derive from `NoiseError`, which extends `std::runtime_error`.
+NoisePQC++ uses exceptions for error reporting. All library errors derive from `NoiseError`, which extends `std::runtime_error` (`Exit`, the examples' exit signal, does not).
 
 ### NoisePQC++ Exception Types
 
@@ -1738,9 +2011,9 @@ struct NoiseError : std::runtime_error;
 ```
 
 **Handshake Errors:**
-- **`HandshakeDoneError`**: Thrown when handshake completes successfully (signals completion)
+- **`HandshakeComplete`**: Thrown by a `WriteMessage`/`ReadMessage` call made after the handshake has completed (the completing call itself returns normally); also stored in `HandshakeStatus::err` as the completion marker, with `state == Done`. Not a failure: `HasError()` is false
 - **`OutOfOrderError`**: Called `WriteMessage` when it's peer's turn, or vice versa
-- **`MessageSizeError`**: Message exceeds configured `maxMessageSize`
+- **`MessageSizeError`**: Handshake or transport message exceeds configured `maxMessageSize`
 - **`TruncatedMessageError`**: Message too short for expected tokens
 - **`MissingKeyError`**: Required key (static or ephemeral) not available
 - **`InvalidTokenError`**: Pattern contains unsupported or invalid token
@@ -1749,15 +2022,18 @@ struct NoiseError : std::runtime_error;
 - **`MissingPSKError`**: Number of PSKs doesn't match `pattern.numPSKs`
 - **`BadPSKError`**: PSK is not exactly 32 bytes
 - **`PreMessageError`**: Required pre-message key missing (e.g., `localStatic` for pattern with `-> s`)
-- **`ProtocolNotSupportedError`**: Invalid protocol string or unsupported algorithm combination
+- **`ProtocolNotSupportedError`**: Invalid protocol string, unknown pattern or algorithm name (only the Noise names are accepted: see `Cipher`, `Hash`, `Dh`), unregistered `hfs` pattern, or an incompatible pattern/algorithm combination (see `Protocol`)
+
+**Key Errors:**
+- **`InvalidPublicKeyError`**: A peer public key was rejected: a low-order X25519/X448 point (at the DH token), an ML-KEM encapsulation key that fails the FIPS 203 Section 7.2 modulus check (at the `ReadMessage` that carries it, or at `Encapsulate` for a pre-message key), or a public key of the wrong length for the algorithm (`Dh::DH`, `Dh::Encapsulate`, `Dh::ValidatePublicKey`, `HandshakeState::ReadMessage`/`WriteMessage`)
+
+**Transport Errors:**
+- **`DecryptionError`**: AEAD decryption failed: the tag did not verify, or the ciphertext is shorter than the tag (`Cipher::Decrypt`, `CipherState::DecryptWithAd`, `HandshakeState::ReadMessage`)
+- **`NonceExhaustedError`**: The nonce reached the reserved value 2⁶⁴−1 (Noise spec Section 5.1); the `CipherState` must not be used further
 
 **Botan Exceptions:**
 
-In addition to NoisePQC++ exceptions, Botan may throw:
-- **`Botan::Invalid_Authentication_Tag`**: AEAD decryption failed (MAC verification failed)
-- **`Botan::Invalid_Key_Length`**: Key size doesn't match algorithm requirements
-- **`Botan::Lookup_Error`**: Algorithm not available in Botan build
-- **`Botan::Exception`**: Base class for all Botan exceptions
+AEAD, DH/KEM and algorithm-construction failures no longer surface as Botan types: `Cipher::Encrypt`/`Decrypt` translate every `Botan::Exception` into `DecryptionError` or `NoiseError`; `Dh::GenerateKeypair`/`DH`/`Encapsulate`/`Decapsulate` into `InvalidPublicKeyError` or `NoiseError`; and the `Cipher` and `Hash` constructors accept only the Noise names (`ProtocolNotSupportedError` otherwise) and translate a Botan factory failure into `NoiseError`. `CipherState::Rekey` computes the Noise REKEY through `Cipher::Encrypt`, so it throws `NoiseError` too. No Botan exception type escapes the library.
 
 ### Error Handling Patterns
 
@@ -1766,12 +2042,16 @@ In addition to NoisePQC++ exceptions, Botan may throw:
 try {
     auto msg = aliceHs.WriteMessage(payload);
     auto response = bobHs.ReadMessage(msg);
-} catch (const HandshakeDoneError&) {
-    // Expected - handshake completed successfully
-    auto [tx, rx] = *aliceHs.GetStatus().cipherStates;
+    if (aliceHs.GetStatus().IsComplete()) {
+        // The completing call returned normally; take the transport states
+        auto states = aliceHs.TakeCipherStates();   // std::optional<std::pair<CipherState, CipherState>>
+        auto& [tx, rx] = *states;                    // initiator: cs1 sends, cs2 receives
+    }
+} catch (const HandshakeComplete&) {
+    // the handshake was already complete: no more handshake messages
 } catch (const OutOfOrderError& e) {
     std::println("Protocol error: {}", e.what());
-} catch (const Botan::Invalid_Authentication_Tag& e) {
+} catch (const DecryptionError& e) {
     std::println("Authentication failed: {}", e.what());
 } catch (const NoiseError& e) {
     std::println("Noise error: {}", e.what());
@@ -1785,8 +2065,9 @@ try {
 auto msg = aliceHs.WriteMessage(payload);
 
 if (aliceHs.GetStatus().IsComplete()) {
-    // Handshake complete - get cipher states
-    auto [tx, rx] = *aliceHs.GetStatus().cipherStates;
+    // Handshake complete - take the transport cipher states
+    auto states = aliceHs.TakeCipherStates();   // std::optional<std::pair<CipherState, CipherState>>
+    auto& [tx, rx] = *states;                    // initiator: cs1 sends, cs2 receives
 } else if (aliceHs.GetStatus().HasError()) {
     // Error occurred
     try {
@@ -1819,13 +2100,23 @@ try {
 }
 ```
 
+## Key Hygiene
+
+The library scrubs its own copies of secret material with `Botan::secure_scrub_memory` before the memory is released: transport and handshake keys (`CipherState`, on destruction and in `Reset()`), the chaining key (`SymmetricState`, on destruction and in `HandshakeState::Reset()`), every DH and KEM shared secret (right after it is mixed in), and the local keypairs held by a `HandshakeState`, including the HFS `e1` decapsulation key (at completion and in the destructor). `Dh` keeps its intermediate values in Botan `secure_vector`s, which Botan scrubs.
+
+The caller owns everything it supplies or copies out: the keys and PSKs in `HandshakeConfig` (never modified by the library, so scrub them yourself when they are no longer needed), the `KeyPair`s returned by `Dh::GenerateKeypair`, the shared secrets returned by `Dh::DH`/`Encapsulate`/`Decapsulate`, and any buffer the application copies `CipherState::key` into. `CipherState::Rekey`'s temporary ciphertext (the new key and the AEAD tag) is scrubbed with `Botan::secure_scrub_memory` before it is released, on every path; the new key overwrites the old one in place.
+
 ## Thread Safety
 
-NoisePQC++ is **not thread-safe**. Each state object should be used by a single thread.
+State objects are **single-thread**: a `HandshakeState`, `SymmetricState`, `CipherState`, `Cipher` or `Hash` must be used by one thread at a time (nonces and hash buffers are mutable state). There is no internal locking.
+
+A `Protocol` is never mutated by the library after construction: each `SymmetricState` works on its own clone of the protocol's hash, and each `CipherState` on its own copy of the cipher. Handshakes built from one shared `Protocol` may therefore run concurrently on different threads, each with its own `HandshakeConfig` and `HandshakeState`, as long as the caller does not use `protocol.hash.hash_function` or `protocol.cipher` directly in the meantime (the Botan hash object is the `Hash`'s mutable state, and `Cipher::Encrypt`/`Decrypt` mutate the AEAD objects and the cached key; see the `Hash` and `Cipher` sections). `tests/test_handshakestate.cpp` runs two threads of NN handshakes from one `Protocol`, and that test has also been run under ThreadSanitizer.
+
+A moved-from `Cipher`, `Hash`, `CipherState`, `SymmetricState`, `DhPrivateKey` or `KemPublicKey` may only be destroyed (or, for the two handles, assigned a new handle); copying a moved-from `SymmetricState` throws `NoiseError`.
 
 ## See Also
 
-- [Pattern Guide](PatternGuide.md) - Complete guide to all 57 Noise patterns with selection guide and use cases
+- [Pattern Guide](PatternGuide.md) - Guide to the classical, PQ and HFS patterns with selection guide and use cases
 - [Architecture Documentation](Architecture.md) - System architecture and design principles
 - [Build Guide](BuildGuide.md) - Platform-specific build instructions and testing
 - [Logging and Debugging Guide](LoggingAndDebugging.md) - Debug builds and handshake state logging

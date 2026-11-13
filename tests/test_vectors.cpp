@@ -19,7 +19,7 @@
 //
 
 //
-// Catch 2 v3 Test Vectors Tests
+// Test Vector Tests using Catch2 v3
 //
 
 #include <catch2/catch_test_macros.hpp>
@@ -54,11 +54,11 @@ struct TestVector {
     // Keys
     ByteVec init_static;
     ByteVec init_ephemeral; //always present in test vectors
-    ByteVec init_remote_static; // For one-way patterns
+    ByteVec init_remote_static; // Responder's static key, when the initiator knows it in advance
 
     ByteVec resp_static;
     ByteVec resp_ephemeral;
-    ByteVec resp_remote_static; // For one-way patterns
+    ByteVec resp_remote_static; // Initiator's static key, when the responder knows it in advance
 
     // Pre-shared keys
     std::vector<ByteVec> init_psks;
@@ -327,7 +327,7 @@ void test_vector_messages(const TestVector& vec, HandshakeState& hs) {
 
 TEST_CASE("Test vectors from cacophony.json", "[vectors][small1]") {
 
-    // Use compile-time definition from CMakeLists.txt for robust path resolution
+    // Use the TESTDATA_DIR compile definition (cmake/BuildConfig.cmake) for robust path resolution
     const std::string filepath = std::string(TESTDATA_DIR) + "/cacophony.json";
 
     auto vectors = load_test_vectors(filepath);

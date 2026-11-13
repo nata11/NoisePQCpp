@@ -1,4 +1,3 @@
-
 # Research Citation for NoisePQC++
 
 Thank you for using NoisePQC++ in research, benchmarking, teaching, or
@@ -23,13 +22,13 @@ Suggested BibTeX:
   title        = {NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography},
   year         = {2026},
   url          = {https://github.com/nata11/NoisePQCpp},
-  version      = {1.0.0}
+  version      = {1.1.0}
 }
 ```
 
 Suggested text citation:
 
-> Ahmed, Nadeem (2026). _NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography._ Version 1.0.0, 2026 https://github.com/nata11/NoisePQCpp
+> Ahmed, Nadeem (2026). _NoisePQC++: A C++23 Implementation of the Noise Protocol Framework with Post-Quantum Cryptography._ Version 1.1.0, 2026. https://github.com/nata11/NoisePQCpp
 
 ## Reproducibility Guidance
 

@@ -19,8 +19,8 @@
 //
 
 
-// Test implementation for HandshakeState module
-// This demonstrates all Noise handshake patterns with comprehensive logging
+// Pattern zoo: runs a complete handshake for any of 84 Noise patterns (not the 23 deferred
+// HFS patterns), by name or by category, with comprehensive logging in debug builds
 
 import noise;
 
@@ -323,8 +323,14 @@ void test_pattern(const std::string& patternName) {
     // Test post-handshake transport (not for one-way patterns)
     if (config.expectedMessages >= 2) {
         print_subsection("Post-Handshake Transport: Alice -> Bob");
-        auto [aliceTx, aliceRx] = *aliceStatus.cipherStates;
-        auto [bobRx, bobTx] = *bobStatus.cipherStates;
+        auto aliceCs = aliceHs.TakeCipherStates();
+        auto bobCs = bobHs.TakeCipherStates();
+        if (!aliceCs || !bobCs) {
+            std::println(std::cerr, "{} Cipher states not available", CROSS_MARK);
+            return;
+        }
+        auto& [aliceTx, aliceRx] = *aliceCs;
+        auto& [bobRx, bobTx] = *bobCs;
 
         std::vector<std::uint8_t> transportMsg1{'t', 'r', 'a', 'n', 's', 'p', 'o', 'r', 't', '1'};
         auto encrypted1 = aliceTx.EncryptWithAd({}, transportMsg1);
@@ -352,43 +358,82 @@ void test_pattern(const std::string& patternName) {
     std::println("\n{}{}{} {} PATTERN TEST PASSED {}{}{}", CHECK_MARK, CHECK_MARK, CHECK_MARK, config.patternName, CHECK_MARK, CHECK_MARK, CHECK_MARK);
 }
 
+// The patterns this program runs, by category: exactly the names get_pattern_config knows.
+// Each size is deduced from its list, so the counts printed below can't drift from what runs.
+constexpr auto ONE_WAY_PATTERNS = std::to_array<std::string_view>({"N", "K", "X"});
+constexpr auto INTERACTIVE_PATTERNS = std::to_array<std::string_view>({
+    "NN", "NK", "NX", "KN", "KK", "KX", "XN", "XK", "XX", "IN", "IK", "IX"
+});
+constexpr auto DEFERRED_PATTERNS = std::to_array<std::string_view>({
+    "NK1", "NX1", "X1N", "X1K", "XK1", "X1K1", "X1X", "XX1", "X1X1",
+    "K1N", "K1K", "KK1", "K1K1", "K1X", "KX1", "K1X1",
+    "I1N", "I1K", "IK1", "I1K1", "I1X", "IX1", "I1X1"
+});
+constexpr auto PSK_PATTERNS = std::to_array<std::string_view>({
+    "Npsk0", "Kpsk0", "Xpsk1",
+    "NNpsk0", "NNpsk2", "NKpsk0", "NKpsk2", "NXpsk2",
+    "XNpsk3", "XKpsk3", "XXpsk3",
+    "KNpsk0", "KNpsk2", "KKpsk0", "KKpsk2", "KXpsk2",
+    "INpsk1", "INpsk2", "IKpsk1", "IKpsk2", "IXpsk2"
+});
+constexpr auto PQ_PATTERNS = std::to_array<std::string_view>({
+    "pqN",  // One-way
+    "pqNN", "pqNK", "pqNX", "pqXN", "pqXK", "pqXX",
+    "pqKN", "pqKK", "pqKX", "pqIN", "pqIK", "pqIX"
+});
+constexpr auto HFS_PATTERNS = std::to_array<std::string_view>({
+    "NNhfs", "NKhfs", "NXhfs", "KNhfs", "KKhfs", "KXhfs",
+    "XNhfs", "XKhfs", "XXhfs", "INhfs", "IKhfs", "IXhfs"
+});
+constexpr std::size_t PATTERN_COUNT = ONE_WAY_PATTERNS.size() + INTERACTIVE_PATTERNS.size() +
+                                      DEFERRED_PATTERNS.size() + PSK_PATTERNS.size() +
+                                      PQ_PATTERNS.size() + HFS_PATTERNS.size();
+
+static_assert(ONE_WAY_PATTERNS.size() == 3);
+static_assert(INTERACTIVE_PATTERNS.size() == 12);
+static_assert(DEFERRED_PATTERNS.size() == 23);
+static_assert(PSK_PATTERNS.size() == 21);
+static_assert(PQ_PATTERNS.size() == 13);
+static_assert(HFS_PATTERNS.size() == 12);
+static_assert(PATTERN_COUNT == 84);
+
 void print_usage(const char* programName) {
     std::println("Usage: {} <PATTERN|CATEGORY>", programName);
     std::println("");
-    std::println("PATTERN must be one of 82 available patterns (case-sensitive):");
+    std::println("PATTERN must be one of {} available patterns (case-sensitive):", PATTERN_COUNT);
     std::println("");
     std::println("Category Options:");
-    std::println("  ONEWAY           - Run all One-Way patterns (3 tests)");
-    std::println("  BASIC            - Run all Fundamental Interactive patterns (12 tests)");
-    std::println("  DEFER            - Run all Deferred patterns (21 tests)");
-    std::println("  PSK              - Run all PSK patterns (21 tests)");
-    std::println("  PQC              - Run all Post-Quantum patterns (13 tests)");
-    std::println("  HFS              - Run all Hybrid Forward Secrecy patterns (12 tests)");
+    std::println("  ONEWAY           - Run all One-Way patterns ({} tests)", ONE_WAY_PATTERNS.size());
+    std::println("  BASIC            - Run all Fundamental Interactive patterns ({} tests)", INTERACTIVE_PATTERNS.size());
+    std::println("  DEFER            - Run all Deferred patterns ({} tests)", DEFERRED_PATTERNS.size());
+    std::println("  PSK              - Run all PSK patterns ({} tests)", PSK_PATTERNS.size());
+    std::println("  PQC              - Run all Post-Quantum patterns ({} tests)", PQ_PATTERNS.size());
+    std::println("  HFS              - Run all Hybrid Forward Secrecy patterns ({} tests)", HFS_PATTERNS.size());
     std::println("");
-    std::println("  One-Way Patterns (3):");
+    std::println("  One-Way Patterns ({}):", ONE_WAY_PATTERNS.size());
     std::println("    N, K, X");
     std::println("");
-    std::println("  Fundamental Interactive Patterns (12):");
+    std::println("  Fundamental Interactive Patterns ({}):", INTERACTIVE_PATTERNS.size());
     std::println("    NN, NK, NX, KN, KK, KX, XN, XK, XX, IN, IK, IX");
     std::println("");
-    std::println("  Deferred Patterns (21):");
+    std::println("  Deferred Patterns ({}):", DEFERRED_PATTERNS.size());
     std::println("    NK1, NX1, X1N, X1K, XK1, X1K1, X1X, XX1, X1X1,");
     std::println("    K1N, K1K, KK1, K1K1, K1X, KX1, K1X1,");
     std::println("    I1N, I1K, IK1, I1K1, I1X, IX1, I1X1");
     std::println("");
-    std::println("  PSK Patterns (21):");
+    std::println("  PSK Patterns ({}):", PSK_PATTERNS.size());
     std::println("    Npsk0, Kpsk0, Xpsk1,");
     std::println("    NNpsk0, NNpsk2, NKpsk0, NKpsk2, NXpsk2,");
     std::println("    XNpsk3, XKpsk3, XXpsk3,");
     std::println("    KNpsk0, KNpsk2, KKpsk0, KKpsk2, KXpsk2,");
     std::println("    INpsk1, INpsk2, IKpsk1, IKpsk2, IXpsk2");
     std::println("");
-    std::println("  Post-Quantum (PQNoise) Patterns (13):");
+    std::println("  Post-Quantum (PQNoise) Patterns ({}):", PQ_PATTERNS.size());
     std::println("    pqN (one-way)");
     std::println("    pqNN, pqNK, pqNX, pqXN, pqXK, pqXX,");
     std::println("    pqKN, pqKK, pqKX, pqIN, pqIK, pqIX");
     std::println("");
-    std::println("  Hybrid Forward Secrecy (HFS) Patterns (12):");
+    std::println("  Hybrid Forward Secrecy (HFS) Patterns ({}):", HFS_PATTERNS.size());
     std::println("    NNhfs, NKhfs, NXhfs, KNhfs, KKhfs, KXhfs,");
     std::println("    XNhfs, XKhfs, XXhfs, INhfs, IKhfs, IXhfs");
     std::println("");
@@ -396,10 +441,10 @@ void print_usage(const char* programName) {
     std::println("  {} XX           - Run only the XX pattern test", programName);
     std::println("  {} XXpsk3       - Run the XX pattern with PSK modifier", programName);
     std::println("  {} X1X1         - Run the X1X1 deferred pattern", programName);
-    std::println("  {} BASIC        - Run all 12 fundamental interactive patterns", programName);
-    std::println("  {} PSK          - Run all 21 PSK patterns", programName);
-    std::println("  {} PQC          - Run all 13 post-quantum patterns", programName);
-    std::println("  {} HFS          - Run all 12 hybrid forward secrecy patterns", programName);
+    std::println("  {} BASIC        - Run all {} fundamental interactive patterns", programName, INTERACTIVE_PATTERNS.size());
+    std::println("  {} PSK          - Run all {} PSK patterns", programName, PSK_PATTERNS.size());
+    std::println("  {} PQC          - Run all {} post-quantum patterns", programName, PQ_PATTERNS.size());
+    std::println("  {} HFS          - Run all {} hybrid forward secrecy patterns", programName, HFS_PATTERNS.size());
 }
 
 bool is_valid_pattern(const std::string& pattern) {
@@ -409,9 +454,12 @@ bool is_valid_pattern(const std::string& pattern) {
         return true;
     }
 
-    // Check if it's a valid pattern name
-    const auto& registry = Noise::GetPatternRegistry();
-    return registry.contains(pattern);
+    // Check if it's one of the patterns this program runs. Not every registry name: the
+    // registry also holds the 23 deferred HFS patterns, which get_pattern_config doesn't know.
+    const std::string_view name{pattern};
+    return std::ranges::contains(ONE_WAY_PATTERNS, name) || std::ranges::contains(INTERACTIVE_PATTERNS, name) ||
+           std::ranges::contains(DEFERRED_PATTERNS, name) || std::ranges::contains(PSK_PATTERNS, name) ||
+           std::ranges::contains(PQ_PATTERNS, name) || std::ranges::contains(HFS_PATTERNS, name);
 }
 
 int main(int argc, char* argv[]) {
@@ -431,7 +479,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // Enable comprehensive logging. Only works in NOISE DEBUG builds
+        // Enable comprehensive logging (a no-op unless built with NOISE_DEBUG_BUILD=ON, the default)
         Noise::EnableAllLogging();
 
         print_separator("NOISE PROTOCOL HANDSHAKE PATTERNS DEMONSTRATION");
@@ -449,84 +497,63 @@ int main(int argc, char* argv[]) {
         // Get all patterns from registry (used for category tests)
         const auto& registry = Noise::GetPatternRegistry();
 
-        // Define pattern groups
-        std::vector<std::string> oneWayPatterns = {"N", "K", "X"};
-        std::vector<std::string> interactivePatterns = {
-            "NN", "NK", "NX", "KN", "KK", "KX", "XN", "XK", "XX", "IN", "IK", "IX"
-        };
-        std::vector<std::string> deferredPatterns = {
-            "NK1", "NX1", "X1N", "X1K", "XK1", "X1K1", "X1X", "XX1", "X1X1",
-            "K1N", "K1K", "KK1", "K1K1", "K1X", "KX1", "K1X1",
-            "I1N", "I1K", "IK1", "I1K1", "I1X", "IX1", "I1X1"
-        };
-        std::vector<std::string> pskPatterns = {
-            "Npsk0", "Kpsk0", "Xpsk1",
-            "NNpsk0", "NNpsk2", "NKpsk0", "NKpsk2", "NXpsk2",
-            "XNpsk3", "XKpsk3", "XXpsk3",
-            "KNpsk0", "KNpsk2", "KKpsk0", "KKpsk2", "KXpsk2",
-            "INpsk1", "INpsk2", "IKpsk1", "IKpsk2", "IXpsk2"
-        };
-        std::vector<std::string> pqPatterns = {
-            "pqN",  // One-way
-            "pqNN", "pqNK", "pqNX", "pqXN", "pqXK", "pqXX",
-            "pqKN", "pqKK", "pqKX", "pqIN", "pqIK", "pqIX"
-        };
-        std::vector<std::string> hfsPatterns = {
-            "NNhfs", "NKhfs", "NXhfs", "KNhfs", "KKhfs", "KXhfs",
-            "XNhfs", "XKhfs", "XXhfs", "INhfs", "IKhfs", "IXhfs"
-        };
-
         // Run requested test(s)
         if (requestedPattern == "ONEWAY") {
-            std::println("\n\nRunning One-Way Patterns (3)...");
-            for (const auto& pattern : oneWayPatterns) {
+            std::println("\n\nRunning One-Way Patterns ({})...", ONE_WAY_PATTERNS.size());
+            for (const std::string_view name : ONE_WAY_PATTERNS) {
+                const std::string pattern{name};
                 if (registry.contains(pattern)) {
                     test_pattern(pattern);
                 }
             }
-            print_separator("ONEWAY: ALL 3 TESTS COMPLETED SUCCESSFULLY!");
+            print_separator(std::format("ONEWAY: ALL {} TESTS COMPLETED SUCCESSFULLY!", ONE_WAY_PATTERNS.size()));
         } else if (requestedPattern == "BASIC") {
-            std::println("\n\nRunning Fundamental Interactive Patterns (12)...");
-            for (const auto& pattern : interactivePatterns) {
+            std::println("\n\nRunning Fundamental Interactive Patterns ({})...", INTERACTIVE_PATTERNS.size());
+            for (const std::string_view name : INTERACTIVE_PATTERNS) {
+                const std::string pattern{name};
                 if (registry.contains(pattern)) {
                     test_pattern(pattern);
                 }
             }
-            print_separator("BASIC: ALL 12 TESTS COMPLETED SUCCESSFULLY!");
+            print_separator(std::format("BASIC: ALL {} TESTS COMPLETED SUCCESSFULLY!", INTERACTIVE_PATTERNS.size()));
         } else if (requestedPattern == "DEFER") {
-            std::println("\n\nRunning Deferred Patterns (21)...");
-            for (const auto& pattern : deferredPatterns) {
+            std::println("\n\nRunning Deferred Patterns ({})...", DEFERRED_PATTERNS.size());
+            for (const std::string_view name : DEFERRED_PATTERNS) {
+                const std::string pattern{name};
                 if (registry.contains(pattern)) {
                     test_pattern(pattern);
                 }
             }
-            print_separator("DEFER: ALL 21 TESTS COMPLETED SUCCESSFULLY!");
+            print_separator(std::format("DEFER: ALL {} TESTS COMPLETED SUCCESSFULLY!", DEFERRED_PATTERNS.size()));
         } else if (requestedPattern == "PSK") {
-            std::println("\n\nRunning PSK Patterns (21)...");
-            for (const auto& pattern : pskPatterns) {
+            std::println("\n\nRunning PSK Patterns ({})...", PSK_PATTERNS.size());
+            for (const std::string_view name : PSK_PATTERNS) {
+                const std::string pattern{name};
                 if (registry.contains(pattern)) {
                     test_pattern(pattern);
                 }
             }
-            print_separator("PSK: ALL 21 TESTS COMPLETED SUCCESSFULLY!");
+            print_separator(std::format("PSK: ALL {} TESTS COMPLETED SUCCESSFULLY!", PSK_PATTERNS.size()));
         } else if (requestedPattern == "PQC") {
-            std::println("\n\nRunning Post-Quantum (PQ) Patterns (13)...");
+            std::println("\n\nRunning Post-Quantum (PQ) Patterns ({})...", PQ_PATTERNS.size());
             std::println("Using ML-KEM-768 (M768) for all PQ patterns\n");
-            for (const auto& pattern : pqPatterns) {
+            for (const std::string_view name : PQ_PATTERNS) {
+                const std::string pattern{name};
                 if (registry.contains(pattern)) {
                     test_pattern(pattern);
                 }
             }
-            print_separator("PQC: ALL 13 TESTS COMPLETED SUCCESSFULLY!");
+            print_separator(std::format("PQC: ALL {} TESTS COMPLETED SUCCESSFULLY!", PQ_PATTERNS.size()));
         } else if (requestedPattern == "HFS") {
-            std::println("\n\nRunning Hybrid Forward Secrecy (HFS) Patterns (12)...");
+            std::println("\n\nRunning Hybrid Forward Secrecy (HFS) Patterns ({})...", HFS_PATTERNS.size());
             std::println("Using X25519 + ML-KEM-768 (25519+M768) for hybrid security\n");
-            for (const auto& pattern : hfsPatterns) {
+            for (const std::string_view name : HFS_PATTERNS) {
+                const std::string pattern{name};
                 if (registry.contains(pattern)) {
                     test_pattern(pattern);
                 }
             }
-            print_separator("HFS: ALL 12 TESTS COMPLETED SUCCESSFULLY!");
+            print_separator(std::format("HFS: ALL {} TESTS COMPLETED SUCCESSFULLY!", HFS_PATTERNS.size()));
         } else {
             // Run single pattern test
             test_pattern(requestedPattern);

@@ -25,8 +25,9 @@ import std;
 export namespace Noise
 {
     /// @name Error Hierarchy
-    /// All library errors derive from NoiseError. HandshakeDoneError is a
-    /// sentinel (not a true error) used to signal successful handshake completion.
+    /// All library errors derive from NoiseError. HandshakeComplete is the completion
+    /// marker, not a true error: HandshakeState stores it in HandshakeStatus::err when the
+    /// handshake completes, and throws it only from a call made after completion.
     /// @{
 
     /** Base error type for all NoisePQC++ library errors. */
@@ -64,20 +65,51 @@ export namespace Noise
             : NoiseError("noisepqc++/HandshakeState: out of order message") {}
     };
 
-    /** A handshake message exceeds the configured maximum size (default 65535 bytes). */
+    /** A handshake or transport message exceeds the configured maximum size (default 65535 bytes). */
     struct MessageSizeError : NoiseError {
         MessageSizeError()
-            : NoiseError("noisepqc++/HandshakeState: message size exceeded") {}
+            : NoiseError("noisepqc++: message size exceeded") {}
     };
 
     /**
-     * Sentinel exception signaling successful handshake completion — not an error.
-     *
-     * Thrown by HandshakeState when the final message is processed. Callers should
-     * catch this and retrieve transport CipherStates from HandshakeStatus.
+     * AEAD decryption failed: the authentication tag did not verify, or the
+     * ciphertext is shorter than the tag. Carries no detail from the cipher backend.
      */
-    struct HandshakeDoneError : NoiseError {
-        HandshakeDoneError()
+    struct DecryptionError : NoiseError {
+        DecryptionError()
+            : NoiseError("noisepqc++/CipherState: decryption failed") {}
+    };
+
+    /**
+     * The nonce has reached the reserved value 2^64-1 (Noise spec Section 5.1).
+     * No further EncryptWithAd/DecryptWithAd call is allowed on this CipherState.
+     */
+    struct NonceExhaustedError : NoiseError {
+        NonceExhaustedError()
+            : NoiseError("noisepqc++/CipherState: nonce exhausted") {}
+    };
+
+    /**
+     * A peer public key was rejected: a low-order DH point (X25519/X448), an ML-KEM
+     * encapsulation key that fails the FIPS 203 Section 7.2 modulus check, or a public
+     * key of the wrong length for the algorithm. Carries no detail from the backend.
+     */
+    struct InvalidPublicKeyError : NoiseError {
+        InvalidPublicKeyError()
+            : NoiseError("noisepqc++/Dh: invalid public key") {}
+    };
+
+    /**
+     * Completion marker of a handshake — not an error.
+     *
+     * When the final handshake message is written or read, HandshakeState stores a
+     * HandshakeComplete in HandshakeStatus::err (with state == Done) and the completing
+     * call returns normally; HasError() is false. It is thrown only by a WriteMessage()
+     * or ReadMessage() call made after completion. Callers take the transport
+     * CipherStates with HandshakeState::TakeCipherStates().
+     */
+    struct HandshakeComplete : NoiseError {
+        HandshakeComplete()
             : NoiseError("noisepqc++/HandshakeState: handshake complete") {}
     };
 

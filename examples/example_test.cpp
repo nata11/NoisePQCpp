@@ -58,7 +58,7 @@ void print_bytes(std::string_view label, std::span<const std::uint8_t> data) {
 }
 
 int main() {
-    EnableAllLogging(); // Only works in debug builds
+    EnableAllLogging(); // No-op unless built with NOISE_DEBUG_BUILD=ON (the default)
     print_separator("NOISE PROTOCOL FRAMEWORK - API EXAMPLE");
     std::println("This example demonstrates the complete Noise API:");
     std::println("  1. Protocol construction (from string and manual)");
@@ -264,10 +264,10 @@ int main() {
 
         std::println("\n5.1 Retrieving handshake status:");
 
-        auto aliceStatus = aliceHs.GetStatus();
+        const auto& aliceStatus = aliceHs.GetStatus();
         std::println("    ✓ Alice's status retrieved");
 
-        auto bobStatus = bobHs.GetStatus();
+        const auto& bobStatus = bobHs.GetStatus();
         std::println("    ✓ Bob's status retrieved");
 
         std::println("\n5.2 Verifying handshake hash:");
@@ -309,20 +309,22 @@ int main() {
         print_subsection("SECTION 6: Post-Handshake Encrypted Transport");
 
         std::println("\n6.1 Extracting CipherState objects:");
-        std::println("    Note: CipherStates are stored in std::optional<std::pair>");
+        std::println("    Note: CipherStates are moved out with TakeCipherStates() (std::optional<std::pair>)");
 
-        if (!aliceStatus.cipherStates.has_value() || !bobStatus.cipherStates.has_value()) {
+        auto aliceStates = aliceHs.TakeCipherStates();
+        auto bobStates = bobHs.TakeCipherStates();
+        if (!aliceStates.has_value() || !bobStates.has_value()) {
             throw std::runtime_error("Cipher states not available");
         }
 
-        auto& aliceTx = aliceStatus.cipherStates->first;
-        auto& aliceRx = aliceStatus.cipherStates->second;
+        auto& aliceTx = aliceStates->first;
+        auto& aliceRx = aliceStates->second;
         std::println("    ✓ Alice: Tx = first, Rx = second");
         std::println("      Tx has key: {}", aliceTx.HasKey() ? "Yes" : "No");
         std::println("      Rx has key: {}", aliceRx.HasKey() ? "Yes" : "No");
 
-        auto& bobRx = bobStatus.cipherStates->first; // Reversed!
-        auto& bobTx = bobStatus.cipherStates->second; // Reversed!
+        auto& bobRx = bobStates->first; // Reversed!
+        auto& bobTx = bobStates->second; // Reversed!
         std::println("    ✓ Bob:   Rx = first, Tx = second (reversed!)");
         std::println("      Tx has key: {}", bobTx.HasKey() ? "Yes" : "No");
         std::println("      Rx has key: {}", bobRx.HasKey() ? "Yes" : "No");
@@ -342,7 +344,6 @@ int main() {
         std::println("    ✓ Alice encrypted");
         print_bytes("      Ciphertext", aliceMsg4);
         std::println("      Overhead: {} bytes", aliceMsg4.size() - alicePlaintext.size());
-        //std::println("Failing here");
         auto bobRecv4 = bobRx.DecryptWithAd({}, aliceMsg4);
         std::println("    ✓ Bob decrypted");
         std::println("      Plaintext: \"{}\"", std::string_view(

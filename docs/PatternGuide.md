@@ -1,14 +1,14 @@
 # Noise Protocol Patterns Reference
 
-**Version**: 1.0.0
-**Last Updated**: 2026-08-26
+**Version**: 1.1.0
+**Last Updated**: 2026-11-13
 
 ## Overview
 This document lists all Noise Protocol patterns implemented in NoisePQC++, including:
 
-- **Classical patterns** (57): Based on the [Noise Protocol Framework Specification (Revision 34)](https://noiseprotocol.org/noise.html)
-- **Post-Quantum (PQ) patterns** (13): Using KEM (Key Encapsulation Mechanism) for quantum resistance
-- **Hybrid Forward Secrecy (HFS) patterns** (12): Combining DH and KEM for defense-in-depth
+- **Classical patterns** (59: 3 one-way + 12 interactive + 23 deferred + 21 PSK): Based on the [Noise Protocol Framework Specification (Revision 34)](https://noiseprotocol.org/noise.html)
+- **Post-Quantum (PQ) patterns** (13: 1 one-way + 12 interactive): Using KEM (Key Encapsulation Mechanism) for quantum resistance
+- **Hybrid Forward Secrecy (HFS) patterns** (35: 12 interactive + 23 deferred): Combining DH and KEM for defense-in-depth
 
 ## Pattern Notation
 - `<- s` or `-> s`: Pre-message patterns (keys known before handshake)
@@ -44,9 +44,9 @@ Single-message patterns for scenarios where only one party sends data.
 | **X** | `<- s` | `-> e, es, s, ss` | Sender authenticates to known responder |
 
 **Security Properties:**
-- **N**: Provides encryption and forward secrecy, but no sender authentication
-- **K**: Provides mutual authentication and forward secrecy
-- **X**: Provides sender authentication and forward secrecy
+- **N**: Provides encryption and forward secrecy for sender compromise only, but no sender authentication
+- **K**: Provides mutual authentication and forward secrecy for sender compromise only
+- **X**: Provides sender authentication and forward secrecy for sender compromise only
 
 ---
 
@@ -98,7 +98,7 @@ Two or three message patterns for full interactive handshakes.
 | Quantum resistance (pure PQ) | **pqXX**, **pqIK**, **pqNK** (KEM-only) |
 | Quantum + classical safety | **XXhfs**, **IKhfs**, **NKhfs** (DH + KEM hybrid) |
 
-### By Message Count (classical patterns)
+### By Message Count (one-way and fundamental patterns)
 
 | Messages | Patterns |
 |----------|----------|
@@ -106,7 +106,7 @@ Two or three message patterns for full interactive handshakes.
 | 2 | **NN**, **NK**, **KN**, **KK**, **NX**, **KX**, **IN**, **IK**, **IX** |
 | 3 | **XN**, **XK**, **XX** |
 
-PQ and HFS variants do not always share their classical base's message count — see the PQ and HFS pattern tables below.
+PQ variants do not always share their classical base's message count (see the note under the PQ table); HFS variants always do.
 
 ### By Use Case
 
@@ -129,7 +129,7 @@ PQ and HFS variants do not always share their classical base's message count —
 ## Security Considerations
 
 ### Forward Secrecy
-All patterns provide forward secrecy (via ephemeral keys), meaning:
+All interactive patterns provide forward secrecy (via ephemeral keys; one-way patterns: sender compromise only), meaning:
 - Past messages remain secure even if long-term keys are compromised
 - Ephemeral keys are destroyed after handshake
 
@@ -140,7 +140,8 @@ All patterns provide forward secrecy (via ephemeral keys), meaning:
 | **N, NN, NK, NX** | Hidden | Varies |
 | **K, KN, KK, KX** | Known (pre-message) | Varies |
 | **X, XN, XK, XX** | Encrypted in handshake | Varies |
-| **I-patterns** | Encrypted in first msg | Varies |
+| **IK** | Encrypted in first msg | Varies |
+| **IN, IX** | Sent in clear in first msg | Varies |
 
 ### Resistance to Key Compromise
 
@@ -149,7 +150,7 @@ All patterns provide forward secrecy (via ephemeral keys), meaning:
 
 ---
 
-### Deferred Patterns (Section 9.4)
+### Deferred Patterns (Section 7.6)
 Deferred patterns delay static key transmission to later messages for improved privacy.
 
 | Pattern | Pre-Messages | Messages | Use Case |
@@ -198,7 +199,7 @@ PSK patterns incorporate pre-shared symmetric keys for additional security.
 #### Interactive PSK Patterns
 | Pattern | Base | Messages | PSK Location |
 |---------|------|----------|--------------|
-| **NNpsk0** | NN | 2 | After Token 0 (start of msg 1) |
+| **NNpsk0** | NN | 2 | Start of msg 1 |
 | **NNpsk2** | NN | 2 | After ee (end of msg 2) |
 | **NKpsk0** | NK | 2 | Start of msg 1 |
 | **NKpsk2** | NK | 2 | End of msg 2 |
@@ -211,14 +212,14 @@ PSK patterns incorporate pre-shared symmetric keys for additional security.
 | **KKpsk0** | KK | 2 | Start of msg 1 |
 | **KKpsk2** | KK | 2 | End of msg 2 |
 | **KXpsk2** | KX | 2 | End of msg 2 |
-| **INpsk1** | IN | 2 | After first DH (after se in msg 1) |
+| **INpsk1** | IN | 2 | End of msg 1 |
 | **INpsk2** | IN | 2 | End of msg 2 |
-| **IKpsk1** | IK | 2 | After first DH (after es in msg 1) |
+| **IKpsk1** | IK | 2 | End of msg 1 |
 | **IKpsk2** | IK | 2 | End of msg 2 |
 | **IXpsk2** | IX | 2 | End of msg 2 |
 
 **PSK Pattern Benefits:**
-- Defense against future quantum computer attacks (when combined with PQ DH)
+- Confidentiality that holds even if DH is broken (for example by a future quantum computer), as long as the PSK stays secret
 - Additional layer of authentication
 - Useful for known-device scenarios
 - Can mitigate key compromise
@@ -348,6 +349,8 @@ Noise_XXhfs_25519+M768_ChaChaPoly_SHA256
 | **IKhfs** | `<- s` | `-> e, es, s, ss, e1`<br>`<- e, ee, ekem1, se` | IK | Immediate hybrid mutual |
 | **IXhfs** | | `-> e, e1, s`<br>`<- e, ee, ekem1, se, s, es` | IX | Immediate hybrid responder |
 
+The 23 deferred patterns take the `hfs` modifier by the same two rules, for example **XX1hfs**: `-> e, e1` / `<- e, ee, ekem1, s` / `-> es, s, se`.
+
 ### HFS Token Semantics
 
 | Token | Operation | Key Type |
@@ -370,7 +373,6 @@ using namespace Noise;
 
 // Create HFS protocol (DH + KEM)
 Protocol protocol("Noise_XXhfs_25519+M768_ChaChaPoly_BLAKE2s");
-// Or: Protocol protocol(XXhfs, X25519, M768, ChaChaPoly, BLAKE2s);
 
 // Generate static keypairs (DH only for static keys in XXhfs)
 auto aliceStatic = protocol.dh.GenerateKeypair();
@@ -422,66 +424,70 @@ HFS:       Noise_XXhfs_25519+M768_ChaChaPoly_BLAKE2s
 
 ## Implementation Status
 
-✅ **Fully Implemented** (82 patterns):
+✅ **Fully Implemented** (107 patterns):
 
-### Classical Patterns (57)
+### Classical Patterns (59)
 - One-way: N, K, X (3 patterns)
 - Fundamental Interactive: NN, NK, NX, KN, KK, KX, XN, XK, XX, IN, IK, IX (12 patterns)
-- Deferred: NK1, NX1, X1N, X1K, XK1, X1K1, X1X, XX1, X1X1, K1N, K1K, KK1, K1K1, K1X, KX1, K1X1, I1N, I1K, IK1, I1K1, I1X, IX1, I1X1 (21 patterns)
+- Deferred: NK1, NX1, X1N, X1K, XK1, X1K1, X1X, XX1, X1X1, K1N, K1K, KK1, K1K1, K1X, KX1, K1X1, I1N, I1K, IK1, I1K1, I1X, IX1, I1X1 (23 patterns)
 - PSK: Npsk0, Kpsk0, Xpsk1, NNpsk0, NNpsk2, NKpsk0, NKpsk2, NXpsk2, XNpsk3, XKpsk3, XXpsk3, KNpsk0, KNpsk2, KKpsk0, KKpsk2, KXpsk2, INpsk1, INpsk2, IKpsk1, IKpsk2, IXpsk2 (21 patterns)
 
 ### Post-Quantum Patterns (13)
 - One-way: pqN (1 pattern)
 - Interactive: pqNN, pqNK, pqNX, pqXN, pqXK, pqXX, pqKN, pqKK, pqKX, pqIN, pqIK, pqIX (12 patterns)
 
-### Hybrid Forward Secrecy Patterns (12)
+### Hybrid Forward Secrecy Patterns (35)
 - Interactive: NNhfs, NKhfs, NXhfs, XNhfs, XKhfs, XXhfs, KNhfs, KKhfs, KXhfs, INhfs, IKhfs, IXhfs (12 patterns)
+- Deferred: NK1hfs, NX1hfs, X1Nhfs, X1Khfs, XK1hfs, X1K1hfs, X1Xhfs, XX1hfs, X1X1hfs, K1Nhfs, K1Khfs, KK1hfs, K1K1hfs, K1Xhfs, KX1hfs, K1X1hfs, I1Nhfs, I1Khfs, IK1hfs, I1K1hfs, I1Xhfs, IX1hfs, I1X1hfs (23 patterns)
 
 ⏳ **Future Extensions**:
 - Fallback patterns (maybe)
-- Additional deferred PQ/HFS variants
+- Deferred PQ variants
 
 ---
 
 ## Testing Matrix
 
-All 82 patterns are fully tested with comprehensive test coverage (200+ test cases, 500+ assertions).
+All 107 patterns are fully tested with comprehensive test coverage (374 test cases).
 
 | Pattern | Unit Test | Integration Test | Interop Test | File Location |
 |---------|-----------|------------------|--------------|---------------|
 | **One-Way Patterns** |
-| N | ✅ | ✅ | ⏳ | test_handshakestate.cpp:1209 |
-| K | ✅ | ✅ | ⏳ | test_handshakestate.cpp:1223 |
-| X | ✅ | ✅ | ⏳ | test_handshakestate.cpp:1237 |
+| N | ✅ | ✅ | ✅ | test_handshakestate.cpp |
+| K | ✅ | ✅ | ✅ | test_handshakestate.cpp |
+| X | ✅ | ✅ | ✅ | test_handshakestate.cpp |
 | **Two-Message Interactive** |
-| NN | ✅ | ✅ | ⏳ | test_handshakestate.cpp (complete) |
-| NK | ✅ | ✅ | ⏳ | test_handshakestate.cpp (complete) |
-| NX | ✅ | ✅ | ⏳ | test_handshakestate.cpp:1251 |
-| KN | ✅ | ✅ | ⏳ | test_handshakestate.cpp:1265 |
-| KK | ✅ | ✅ | ⏳ | test_handshakestate.cpp (complete) |
-| KX | ✅ | ✅ | ⏳ | test_handshakestate.cpp:1279 |
-| IN | ✅ | ✅ | ⏳ | test_handshakestate.cpp:1321 |
-| IK | ✅ | ✅ | ⏳ | test_handshakestate.cpp:1335 |
-| IX | ✅ | ✅ | ⏳ | test_handshakestate.cpp:1349 |
+| NN | ✅ | ✅ | ✅ | test_handshakestate.cpp (complete) |
+| NK | ✅ | ✅ | ✅ | test_handshakestate.cpp (complete) |
+| NX | ✅ | ✅ | ✅ | test_handshakestate.cpp |
+| KN | ✅ | ✅ | ✅ | test_handshakestate.cpp |
+| KK | ✅ | ✅ | ✅ | test_handshakestate.cpp (complete) |
+| KX | ✅ | ✅ | ✅ | test_handshakestate.cpp |
+| IN | ✅ | ✅ | ✅ | test_handshakestate.cpp |
+| IK | ✅ | ✅ | ✅ | test_handshakestate.cpp |
+| IX | ✅ | ✅ | ✅ | test_handshakestate.cpp |
 | **Three-Message Interactive** |
-| XN | ✅ | ✅ | ⏳ | test_handshakestate.cpp:1293 |
-| XK | ✅ | ✅ | ⏳ | test_handshakestate.cpp:1307 |
-| XX | ✅ | ✅ | ⏳ | test_handshakestate.cpp (complete) |
-| **Deferred Patterns** (21 total) |
-| All deferred | ✅ | ✅ | ⏳ | test_handshakestate.cpp (lines 1400-1700) |
+| XN | ✅ | ✅ | ✅ | test_handshakestate.cpp |
+| XK | ✅ | ✅ | ✅ | test_handshakestate.cpp |
+| XX | ✅ | ✅ | ✅ | test_handshakestate.cpp (complete) |
+| **Deferred Patterns** (23 total) |
+| All deferred | ✅ | ✅ | ✅ | test_handshakestate.cpp |
 | **PSK Patterns** (21 total) |
-| All PSK | ✅ | ✅ | ⏳ | test_handshakestate.cpp (lines 1770-2100) |
+| All PSK | ✅ | ✅ | ✅ | test_handshakestate.cpp |
 | **Post-Quantum Patterns** (13 total) |
 | pqN | ✅ | ✅ | ⏳ | test_noise_pq.cpp |
 | pqNN, pqNK, pqNX | ✅ | ✅ | ⏳ | test_noise_pq.cpp |
 | pqXN, pqXK, pqXX | ✅ | ✅ | ⏳ | test_noise_pq.cpp |
 | pqKN, pqKK, pqKX | ✅ | ✅ | ⏳ | test_noise_pq.cpp |
 | pqIN, pqIK, pqIX | ✅ | ✅ | ⏳ | test_noise_pq.cpp |
-| **HFS Patterns** (12 total) |
+| **HFS Patterns** (35 total) |
 | NNhfs, NKhfs, NXhfs | ✅ | ✅ | ⏳ | test_hfs.cpp |
 | XNhfs, XKhfs, XXhfs | ✅ | ✅ | ⏳ | test_hfs.cpp |
 | KNhfs, KKhfs, KXhfs | ✅ | ✅ | ⏳ | test_hfs.cpp |
 | INhfs, IKhfs, IXhfs | ✅ | ✅ | ⏳ | test_hfs.cpp |
+| Deferred: NK1hfs … I1X1hfs | ✅ | ✅ | ⏳ | test_hfs.cpp |
+
+**Interop**: the classical rows are checked against the Cacophony vectors (`testdata/cacophony.json`, run by `test_vectors.cpp`).
 
 **Test Coverage Details**:
 - ✅ Pattern-specific handshake execution
@@ -500,27 +506,27 @@ All 82 patterns are fully tested with comprehensive test coverage (200+ test cas
 **Running Tests**:
 ```bash
 # Run all handshake tests (classical patterns)
-./tests/test_handshakestate
+./build/bin/tests/test_handshakestate
 
 # Run Post-Quantum pattern tests
-./tests/test_noise_pq
+./build/bin/tests/test_noise_pq
 
 # Run Hybrid Forward Secrecy tests
-./tests/test_hfs
+./build/bin/tests/test_hfs
 
 # Run specific pattern tests
-./tests/test_handshakestate "[oneway]"      # All one-way patterns
-./tests/test_handshakestate "[interactive]"  # All interactive patterns
-./tests/test_handshakestate "[deferred]"     # All 21 deferred patterns
-./tests/test_handshakestate "[psk]"          # All 21 PSK patterns
-./tests/test_handshakestate "[xx]"           # XX pattern only
-./tests/test_noise_pq "[pqxx]"               # pqXX pattern only
-./tests/test_hfs "[xxhfs]"                   # XXhfs pattern only
+./build/bin/tests/test_handshakestate "[oneway]"       # All one-way patterns
+./build/bin/tests/test_handshakestate "[interactive]"  # NX, KN, KX, XN, XK, IN, IK and IX
+./build/bin/tests/test_handshakestate "[deferred]"     # All 23 deferred patterns
+./build/bin/tests/test_handshakestate "[psk]"          # All 21 PSK patterns
+./build/bin/tests/test_handshakestate "[xx]"           # XX pattern only
+./build/bin/tests/test_noise_pq "[pqxx]"               # pqXX pattern only
+./build/bin/tests/test_hfs "[xxhfs]"                   # XXhfs pattern only
 
 # List all test cases
-./tests/test_handshakestate --list-tests
-./tests/test_noise_pq --list-tests
-./tests/test_hfs --list-tests
+./build/bin/tests/test_handshakestate --list-tests
+./build/bin/tests/test_noise_pq --list-tests
+./build/bin/tests/test_hfs --list-tests
 ```
 
 ---
@@ -542,7 +548,7 @@ All 82 patterns are fully tested with comprehensive test coverage (200+ test cas
 import noise;
 using namespace Noise;
 
-// Create protocol: Noise_XX_X25519_ChaChaPoly_SHA256
+// Create protocol: Noise_XX_25519_ChaChaPoly_SHA256
 Protocol protocol(XX, X25519, ChaChaPoly, SHA256);
 
 // Generate static keys
@@ -557,7 +563,8 @@ HandshakeState aliceHs(aliceCfg);
 HandshakeState bobHs(bobCfg);
 
 // Execute 3-message handshake
-auto msg1 = aliceHs.WriteMessage({'h', 'e', 'l', 'l', 'o'});
+std::vector<std::uint8_t> hello{'h', 'e', 'l', 'l', 'o'};
+auto msg1 = aliceHs.WriteMessage(hello);
 auto recv1 = bobHs.ReadMessage(msg1);
 
 auto msg2 = bobHs.WriteMessage({});
@@ -566,15 +573,17 @@ aliceHs.ReadMessage(msg2);
 auto msg3 = aliceHs.WriteMessage({});
 bobHs.ReadMessage(msg3);
 
-// Handshake complete! Both have cipher states for transport encryption
-auto [aliceTx, aliceRx] = *aliceHs.GetStatus().cipherStates;
+// Handshake complete! Both have cipher states for transport encryption: take them
+// (moved out of the HandshakeState, not copied)
+auto aliceStates = aliceHs.TakeCipherStates();   // std::optional<std::pair<CipherState, CipherState>>
+auto& [aliceTx, aliceRx] = *aliceStates;          // initiator: cs1 sends, cs2 receives
 ```
 
-See [examples/example_test.cpp](examples/example_test.cpp) for complete working examples.
+See [examples/example_test.cpp](../examples/example_test.cpp) for complete working examples.
 
 ---
 
-**Last Updated**: 2026-08-26
-**Pattern Count**: 82 patterns (57 classical + 13 PQ + 12 HFS, all tested)
-**Test Coverage**: 200+ test cases, 500+ assertions
+**Last Updated**: 2026-11-13
+**Pattern Count**: 107 patterns (59 classical + 13 PQ + 35 HFS, all tested)
+**Test Coverage**: 374 test cases
 **Specification Version**: Revision 34+ (with PQNoise and HFS extensions)

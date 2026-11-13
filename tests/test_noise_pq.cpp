@@ -19,7 +19,7 @@
 //
 
 //
-// NoisePQC++ Post-Quantum Pattern Tests using Catch2 v3.11
+// NoisePQC++ Post-Quantum Pattern Tests using Catch2 v3
 //
 
 #include <catch2/catch_test_macros.hpp>
@@ -145,7 +145,7 @@ TEST_CASE("PQ - pqNN pattern with M512", "[pqnoise][pattern][pqnn][m512]") {
         .responderNeedsStatic = false,
         .initiatorNeedsRemoteStatic = false,
         .responderNeedsRemoteStatic = false,
-        .expectedMessages = 2  // Fixed: was incorrectly 3
+        .expectedMessages = 2
     };
 
     test_pq_pattern_handshake(config);
@@ -160,7 +160,7 @@ TEST_CASE("PQ - pqNN pattern with M768", "[pqnoise][pattern][pqnn][m768]") {
         .responderNeedsStatic = false,
         .initiatorNeedsRemoteStatic = false,
         .responderNeedsRemoteStatic = false,
-        .expectedMessages = 2  // Fixed: was incorrectly 3
+        .expectedMessages = 2
     };
 
     test_pq_pattern_handshake(config);
@@ -175,7 +175,7 @@ TEST_CASE("PQ - pqNN pattern with M1024", "[pqnoise][pattern][pqnn][m1024]") {
         .responderNeedsStatic = false,
         .initiatorNeedsRemoteStatic = false,
         .responderNeedsRemoteStatic = false,
-        .expectedMessages = 2  // Fixed: was incorrectly 3
+        .expectedMessages = 2
     };
 
     test_pq_pattern_handshake(config);
@@ -216,7 +216,7 @@ TEST_CASE("PQ - pqNK pattern with M768", "[pqnoise][pattern][pqnk][m768]") {
 }
 
 // ================================
-// pqKK Pattern Tests (Mutual pre-shared key authentication)
+// pqKK Pattern Tests (Mutual authentication, pre-known static keys)
 // ================================
 
 TEST_CASE("PQ - pqKK pattern with M512", "[pqnoise][pattern][pqkk][m512]") {
@@ -356,7 +356,7 @@ TEST_CASE("PQ - pqN pattern with M768", "[pqnoise][pattern][pqn][m768]") {
 }
 
 // ================================
-// pqNX Pattern Tests (No auth, responder sends static)
+// pqNX Pattern Tests (No auth initiator, responder sends static)
 // ================================
 
 TEST_CASE("PQ - pqNX pattern with M768", "[pqnoise][pattern][pqnx][m768]") {
@@ -609,9 +609,235 @@ TEST_CASE("PQ - All 13 PQ patterns pass validation", "[pqnoise][pattern][validat
     }
 }
 
+// ================================
+// Early ML-KEM key validation
+// ================================
+
+namespace {
+    // Counts observer calls; never rejects.
+    class CountingObserver final : public HandshakeObserver {
+    public:
+        int calls = 0;
+
+        std::optional<std::string> OnPeerPublicKey(Token /*token*/, const PublicKey& /*pubKey*/) override {
+            ++calls;
+            return std::nullopt;
+        }
+    };
+}
+
+TEST_CASE("pqNN - Out-of-range ML-KEM ephemeral rejected by ReadMessage", "[pqnoise][error][invalidkey][m768]") {
+    Protocol protocol(pqNN, M768, ChaChaPoly, SHA256);
+    CountingObserver observer;
+
+    HandshakeConfig aliceCfg{.protocol = protocol, .isInitiator = true};
+    HandshakeConfig bobCfg{.protocol = protocol, .isInitiator = false, .observer = &observer};
+    HandshakeState aliceHs(aliceCfg);
+    HandshakeState bobHs(bobCfg);
+
+    // -> e : the ML-KEM-768 encapsulation key is in the clear at offset 0. Set coefficient 0
+    // (ByteEncode12, FIPS 203 Algorithm 5) to 0xFFF = 4095 >= q = 3329, which the FIPS 203
+    // Section 7.2 modulus check must reject.
+    auto bad = aliceHs.WriteMessage({});
+    REQUIRE(bad.size() >= protocol.dh.PublicKeySize());
+    bad[0] = 0xFF;
+    bad[1] |= 0x0F;
+
+    // Rejected by the ReadMessage that carries it, before the observer sees the key
+    REQUIRE_THROWS_AS(bobHs.ReadMessage(bad), InvalidPublicKeyError);
+    REQUIRE(observer.calls == 0);
+    REQUIRE(bobHs.GetStatus().HasError());
+}
+
 // Main function for Catch2
 int main(int argc, char* argv[]) {
     // Disable all logging during tests for clean output
     Noise::DisableAllLogging();
     return Catch::Session().run(argc, argv);
+}
+
+// ================================
+// pqN is one-way (Noise spec Section 7.4): only the initiator-to-responder CipherState is keyed
+// ================================
+
+TEST_CASE("PQ - pqN is one-way: the second CipherState is unkeyed", "[pqnoise][pattern][pqn][oneway]") {
+    REQUIRE(pqN.isOneWay);
+
+    const Protocol protocol{"Noise_pqN_M768_ChaChaPoly_SHA256"};
+    const KeyPair bobStatic = protocol.dh.GenerateKeypair();
+
+    const HandshakeConfig aliceCfg{
+        .protocol = protocol,
+        .isInitiator = true,
+        .remoteStatic = bobStatic.public_key
+    };
+    const HandshakeConfig bobCfg{
+        .protocol = protocol,
+        .isInitiator = false,
+        .localStatic = bobStatic
+    };
+    HandshakeState alice{aliceCfg};
+    HandshakeState bob{bobCfg};
+
+    const std::vector<std::uint8_t> payload{'o', 'n', 'e', '-', 'w', 'a', 'y'};
+    const auto message = alice.WriteMessage(payload);
+    REQUIRE(bob.ReadMessage(message) == payload);
+    REQUIRE(alice.GetStatus().IsComplete());
+    REQUIRE(bob.GetStatus().IsComplete());
+
+    REQUIRE(alice.GetStatus().cipherStates.has_value());
+    REQUIRE(bob.GetStatus().cipherStates.has_value());
+
+    // The responder-to-initiator direction is reset on both sides
+    REQUIRE_FALSE(alice.GetStatus().cipherStates->second.HasKey());
+    REQUIRE_FALSE(bob.GetStatus().cipherStates->second.HasKey());
+
+    // The initiator-to-responder direction still carries one transport message
+    auto [aliceCs1, aliceCs2] = *alice.GetStatus().cipherStates;
+    auto [bobCs1, bobCs2] = *bob.GetStatus().cipherStates;
+    REQUIRE(aliceCs1.HasKey());
+    REQUIRE(bobCs1.HasKey());
+    const std::vector<std::uint8_t> text{'H', 'e', 'l', 'l', 'o'};
+    const auto ciphertext = aliceCs1.EncryptWithAd({}, text);
+    REQUIRE(bobCs1.DecryptWithAd({}, ciphertext) == text);
+}
+
+// ================================
+// A pre-message ML-KEM remote static from the config is loaded (and so validated) at
+// the first skem token, not at construction, as the rule for config keys says
+// ================================
+
+namespace {
+    // Sets coefficient 0 of an ML-KEM encapsulation key (ByteEncode12, FIPS 203 Algorithm 5) to
+    // 0xFFF = 4095 >= q = 3329, which the FIPS 203 Section 7.2 modulus check must reject
+    // (test_dh.cpp has the same helper).
+    std::vector<std::uint8_t> WithCoefficient0OutOfRange(std::vector<std::uint8_t> key) {
+        key[0] = 0xFF;
+        key[1] |= 0x0F;
+        return key;
+    }
+}
+
+TEST_CASE("pqIK: an invalid configured remote static fails the skem write with InvalidPublicKeyError", "[pq][kem][validate]") {
+    const Protocol protocol(pqIK, M768, ChaChaPoly, SHA256);
+    const KeyPair aliceStatic = protocol.dh.GenerateKeypair();
+    const KeyPair bobStatic = protocol.dh.GenerateKeypair();
+
+    // pqIK's pre-message hands the initiator the responder's static. A config key is not checked
+    // at construction; the malformed one fails the first WriteMessage at its skem token.
+    const HandshakeConfig aliceCfg{
+        .protocol = protocol,
+        .isInitiator = true,
+        .localStatic = aliceStatic,
+        .remoteStatic = WithCoefficient0OutOfRange(bobStatic.public_key)
+    };
+    HandshakeState alice{aliceCfg};
+    REQUIRE_FALSE(alice.GetStatus().HasError());
+
+    REQUIRE_THROWS_AS(alice.WriteMessage({}), InvalidPublicKeyError);
+    REQUIRE(alice.GetStatus().HasError());
+    REQUIRE(alice.GetStatus().state == HandshakeStatus::State::Failed);
+}
+
+// ================================
+// The observer is called for exactly the e, s and e1 keys a side receives
+// ================================
+
+namespace {
+    std::string_view TokenName(const Token token) {
+        switch (token) {
+        case Token::Token_e:     return "e";
+        case Token::Token_s:     return "s";
+        case Token::Token_e1:    return "e1";
+        case Token::Token_ekem:  return "ekem";
+        case Token::Token_skem:  return "skem";
+        case Token::Token_ekem1: return "ekem1";
+        default:                 return "other";
+        }
+    }
+
+    // Records every observer call in order; never rejects.
+    class RecordingObserver final : public HandshakeObserver {
+    public:
+        std::vector<std::string_view> tokens;
+        std::vector<PublicKey> keys;
+
+        std::optional<std::string> OnPeerPublicKey(const Token token, const PublicKey& pubKey) override {
+            tokens.push_back(TokenName(token));
+            keys.push_back(pubKey);
+            return std::nullopt;
+        }
+    };
+
+    struct ObservedHandshake {
+        RecordingObserver initiator;
+        RecordingObserver responder;
+        KeyPair initiatorStatic;
+        KeyPair responderStatic;
+        PublicKey initiatorEphemeral;
+        PublicKey responderEphemeral;
+    };
+
+    // Runs a complete handshake with a static key and an observer on each side.
+    void RunObserved(const Protocol& protocol, ObservedHandshake& run) {
+        run.initiatorStatic = protocol.dh.GenerateKeypair();
+        run.responderStatic = protocol.dh.GenerateKeypair();
+        const HandshakeConfig initiatorCfg{
+            .protocol = protocol,
+            .isInitiator = true,
+            .localStatic = run.initiatorStatic,
+            .observer = &run.initiator
+        };
+        const HandshakeConfig responderCfg{
+            .protocol = protocol,
+            .isInitiator = false,
+            .localStatic = run.responderStatic,
+            .observer = &run.responder
+        };
+        HandshakeState initiator{initiatorCfg};
+        HandshakeState responder{responderCfg};
+
+        bool initiatorWrites = true;
+        for (int message = 0; message < 8 && !(initiator.GetStatus().IsComplete() && responder.GetStatus().IsComplete()); ++message) {
+            HandshakeState& writer = initiatorWrites ? initiator : responder;
+            HandshakeState& reader = initiatorWrites ? responder : initiator;
+            (void)reader.ReadMessage(writer.WriteMessage({}));
+            initiatorWrites = !initiatorWrites;
+        }
+        REQUIRE(initiator.GetStatus().IsComplete());
+        REQUIRE(responder.GetStatus().IsComplete());
+
+        run.initiatorEphemeral = initiator.GetStatus().localEphemeral;
+        run.responderEphemeral = responder.GetStatus().localEphemeral;
+    }
+}
+
+TEST_CASE("PQ - the observer is called only for the e, s and e1 keys each side receives", "[pqnoise][hfs][observer]") {
+    SECTION("pqXX (ML-KEM-768): -> e / <- ekem, s / -> skem, s / <- skem") {
+        const Protocol protocol(pqXX, M768, ChaChaPoly, SHA256);
+        ObservedHandshake run;
+        RunObserved(protocol, run);
+
+        // The initiator receives s (message 2); the responder receives e (message 1) and s (message 3).
+        CHECK(run.initiator.tokens == std::vector<std::string_view>{"s"});
+        CHECK(run.initiator.keys == std::vector<PublicKey>{run.responderStatic.public_key});
+        CHECK(run.responder.tokens == std::vector<std::string_view>{"e", "s"});
+        CHECK(run.responder.keys == std::vector<PublicKey>{run.initiatorEphemeral, run.initiatorStatic.public_key});
+    }
+
+    SECTION("XXhfs (X25519 + ML-KEM-768): -> e, e1 / <- e, ee, ekem1, s, es / -> s, se") {
+        const Protocol protocol{"Noise_XXhfs_25519+M768_ChaChaPoly_SHA256"};
+        ObservedHandshake run;
+        RunObserved(protocol, run);
+
+        // The initiator receives e and s (message 2); the responder receives e and e1 (message 1)
+        // and s (message 3).
+        CHECK(run.initiator.tokens == std::vector<std::string_view>{"e", "s"});
+        CHECK(run.initiator.keys == std::vector<PublicKey>{run.responderEphemeral, run.responderStatic.public_key});
+        CHECK(run.responder.tokens == std::vector<std::string_view>{"e", "e1", "s"});
+        REQUIRE(run.responder.keys.size() == 3);
+        CHECK(run.responder.keys[0] == run.initiatorEphemeral);
+        CHECK(run.responder.keys[1].size() == protocol.kem->PublicKeySize());
+        CHECK(run.responder.keys[2] == run.initiatorStatic.public_key);
+    }
 }

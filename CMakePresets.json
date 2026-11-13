@@ -1,0 +1,66 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 4, "minor": 3, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "architecture": { "value": "x64", "strategy": "external" },
+      "toolset": { "value": "host=x64", "strategy": "external" },
+      "cacheVariables": { "NOISE_DEBUG_BUILD": "OFF" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "windows-release",
+      "inherits": "windows-base",
+      "displayName": "Windows MSVC Release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "windows-debug",
+      "inherits": "windows-base",
+      "displayName": "Windows MSVC Debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "windows-release-mt",
+      "inherits": "windows-release",
+      "displayName": "Windows MSVC Release, static runtime",
+      "cacheVariables": { "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>" }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-build-base",
+      "hidden": true,
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    { "name": "windows-release", "inherits": "windows-build-base", "configurePreset": "windows-release" },
+    { "name": "windows-debug", "inherits": "windows-build-base", "configurePreset": "windows-debug" },
+    { "name": "windows-release-mt", "inherits": "windows-build-base", "configurePreset": "windows-release-mt" }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-test-base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    { "name": "windows-release", "inherits": "windows-test-base", "configurePreset": "windows-release" },
+    { "name": "windows-debug", "inherits": "windows-test-base", "configurePreset": "windows-debug" },
+    { "name": "windows-release-mt", "inherits": "windows-test-base", "configurePreset": "windows-release-mt" }
+  ],
+  "workflowPresets": [
+    {
+      "name": "windows-release",
+      "displayName": "Windows MSVC Release: configure, build, test",
+      "steps": [
+        { "type": "configure", "name": "windows-release" },
+        { "type": "build", "name": "windows-release" },
+        { "type": "test", "name": "windows-release" }
+      ]
+    }
+  ]
+}

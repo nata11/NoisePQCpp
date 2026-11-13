@@ -19,7 +19,7 @@
 //
 
 //
-// Initial Benchmark Tests using Google Benchmark
+// Basic Benchmarks (SHA-256 hashing, X25519 key generation and DH) using Google Benchmark
 //
 
 #include <benchmark/benchmark.h>

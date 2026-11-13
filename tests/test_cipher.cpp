@@ -19,7 +19,7 @@
 //
 
 //
-// Cipher Module Tests using Catch2 v3.11
+// Cipher Module Tests using Catch2 v3
 //
 
 #include <catch2/catch_test_macros.hpp>
@@ -190,7 +190,6 @@ TEST_CASE("Cipher - Different nonces produce different ciphertexts", "[cipher][n
     Cipher cipher(ChaChaPoly);
 
     std::array<std::uint8_t, 32> key{};
-    //std::fill(key.begin(), key.end(), 0x42);
     std::ranges::fill(key, 0x42);
 
 
@@ -524,6 +523,240 @@ TEST_CASE("Cipher - Multiple encrypts to same destination buffer", "[cipher][buf
     cipher.Encrypt(dst, key, 1, ad, plaintext2);
 
     REQUIRE(dst.size() == sizeAfterFirst + plaintext2.size() + 16);
+}
+
+// ============================================================================
+// Error-model tests
+// ============================================================================
+
+TEST_CASE("Cipher - Decrypt failure leaves dst unchanged", "[cipher][security][error]") {
+    Cipher cipher(ChaChaPoly);
+    std::array<std::uint8_t, 32> key{};
+    std::ranges::fill(key, 0x42);
+    const std::vector<std::uint8_t> plaintext = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60};
+    const std::vector<std::uint8_t> ad = {0xA0};
+    const std::vector<std::uint8_t> prefix = {0xAA, 0xBB, 0xCC};
+
+    std::vector<std::uint8_t> ciphertext;
+    cipher.Encrypt(ciphertext, key, 7, ad, plaintext);
+
+    SECTION("Tampered ciphertext") {
+        auto tampered = ciphertext;
+        tampered.back() ^= 0x80;  // flip a tag bit
+
+        std::vector<std::uint8_t> dst = prefix;
+        REQUIRE_THROWS_AS(cipher.Decrypt(dst, key, 7, ad, tampered), DecryptionError);
+        REQUIRE(dst == prefix);
+    }
+
+    SECTION("Ciphertext shorter than the tag") {
+        const std::vector<std::uint8_t> shortCt(ciphertext.begin(), ciphertext.begin() + 5);
+
+        std::vector<std::uint8_t> dst = prefix;
+        REQUIRE_THROWS_AS(cipher.Decrypt(dst, key, 7, ad, shortCt), DecryptionError);
+        REQUIRE(dst == prefix);
+    }
+
+    SECTION("The untouched ciphertext still decrypts into the same dst") {
+        std::vector<std::uint8_t> dst = prefix;
+        cipher.Decrypt(dst, key, 7, ad, ciphertext);
+        REQUIRE(dst.size() == prefix.size() + plaintext.size());
+        REQUIRE(std::vector<std::uint8_t>(dst.begin() + 3, dst.end()) == plaintext);
+    }
+}
+
+TEST_CASE("Cipher - Only Noise cipher names are accepted", "[cipher][constructor][allowlist]") {
+    SECTION("Botan spellings and other cases are rejected before any Botan call") {
+        REQUIRE_THROWS_AS(Cipher{"AES-256/GCM"}, ProtocolNotSupportedError);
+        REQUIRE_THROWS_AS(Cipher{"chachapoly"}, ProtocolNotSupportedError);
+    }
+
+    SECTION("The two Noise names construct and report themselves") {
+        REQUIRE(Cipher{"ChaChaPoly"}.String() == ChaChaPoly);
+        REQUIRE(Cipher{"AESGCM"}.String() == AESGCM);
+    }
+
+    SECTION("A copy keeps the algorithm and produces identical ciphertext") {
+        for (const std::string_view name : {ChaChaPoly, AESGCM}) {
+            INFO("cipher: " << name);
+            const Cipher original{name};
+            const Cipher copy{original};
+            REQUIRE(copy.String() == original.String());
+
+            const std::vector<std::uint8_t> key(32, 0x11);
+            const std::vector<std::uint8_t> ad{0x01, 0x02};
+            const std::vector<std::uint8_t> plaintext(40, 0x5a);
+            std::vector<std::uint8_t> ct1, ct2;
+            original.Encrypt(ct1, key, 7, ad, plaintext);
+            copy.Encrypt(ct2, key, 7, ad, plaintext);
+            REQUIRE(ct1 == ct2);
+            REQUIRE(ct1.size() == plaintext.size() + copy.GetAeadTagSize());
+        }
+    }
+}
+
+TEST_CASE("Cipher - in-place Encrypt/Decrypt match at every size and offset", "[cipher][inplace]") {
+    // Guard for the in-place AEAD path: the bytes appended after a prefix equal the bytes produced
+    // into an empty vector, the prefix is untouched, decrypt round-trips into a prefixed vector,
+    // and a tag failure leaves the prefixed vector exactly as it was.
+    constexpr std::array<std::size_t, 8> sizes{0, 1, 15, 16, 17, 64, 1024, 65519};
+    const std::array<std::vector<std::uint8_t>, 2> prefixes{
+        std::vector<std::uint8_t>{},
+        std::vector<std::uint8_t>{0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6}
+    };
+    std::array<std::uint8_t, 32> key{};
+    for (std::size_t i = 0; i < key.size(); ++i) key[i] = static_cast<std::uint8_t>(i * 7 + 1);
+    const std::vector<std::uint8_t> ad{'n', 'o', 'i', 's', 'e', '-', 'a', 'd'};
+    constexpr std::uint64_t nonce = 5;
+
+    for (const auto name : {ChaChaPoly, AESGCM}) {
+        INFO(name);
+        const Cipher cipher{name};
+        REQUIRE(cipher.GetAeadTagSize() == 16);
+
+        for (const auto size : sizes) {
+            INFO("plaintext size " << size);
+            std::vector<std::uint8_t> plaintext(size);
+            for (std::size_t i = 0; i < size; ++i) plaintext[i] = static_cast<std::uint8_t>((i * 31 + size) & 0xFF);
+
+            std::vector<std::uint8_t> reference;
+            cipher.Encrypt(reference, key, nonce, ad, plaintext);
+            CHECK(reference.size() == size + 16);
+
+            for (const auto& prefix : prefixes) {
+                INFO("prefix size " << prefix.size());
+
+                // Encrypt appended after the prefix
+                auto dst = prefix;
+                cipher.Encrypt(dst, key, nonce, ad, plaintext);
+                CHECK(dst.size() == prefix.size() + size + 16);
+                CHECK(std::ranges::equal(std::span{dst}.first(prefix.size()), prefix));
+                CHECK(std::ranges::equal(std::span{dst}.subspan(prefix.size()), reference));
+
+                // Decrypt appended after the prefix
+                auto out = prefix;
+                cipher.Decrypt(out, key, nonce, ad, reference);
+                CHECK(out.size() == prefix.size() + size);
+                CHECK(std::ranges::equal(std::span{out}.first(prefix.size()), prefix));
+                CHECK(std::ranges::equal(std::span{out}.subspan(prefix.size()), plaintext));
+
+                // One-bit tag flip: DecryptionError, and the prefixed vector is exactly as it was
+                auto tampered = reference;
+                tampered.back() ^= 0x01;
+                auto scratch = prefix;
+                CHECK_THROWS_AS(cipher.Decrypt(scratch, key, nonce, ad, tampered), DecryptionError);
+                CHECK(scratch == prefix);
+            }
+        }
+    }
+}
+
+// Guard: Cipher re-keys its AEAD only when the key changes. The cache must be
+// invisible; this case pins exactly the sequences the cache could get wrong (K1, K2, K1;
+// encrypt then decrypt with another key; copies; moves; Reset; a rejected key).
+TEST_CASE("Cipher - re-keys exactly when the key changes", "[cipher][key][cache]") {
+    for (const auto name : {ChaChaPoly, AESGCM}) {
+        INFO("cipher " << name);
+        std::array<std::uint8_t, 32> k1{};
+        std::ranges::fill(k1, 0x11);
+        std::array<std::uint8_t, 32> k2{};
+        std::ranges::fill(k2, 0x22);
+        const std::vector<std::uint8_t> pt = {0x4e, 0x6f, 0x69, 0x73, 0x65, 0x50, 0x51, 0x43};
+        const std::vector<std::uint8_t> ad = {0xad, 0x01};
+        const std::uint64_t nonce = 7;
+
+        // Reference ciphertexts from fresh ciphers that have only ever seen one key
+        const auto fresh = [&](const std::span<const std::uint8_t> k) {
+            const Cipher c(name);
+            std::vector<std::uint8_t> out;
+            c.Encrypt(out, k, nonce, ad, pt);
+            return out;
+        };
+        const auto c1 = fresh(k1);
+        const auto c2 = fresh(k2);
+        REQUIRE(c1 != c2);
+
+        Cipher cipher(name);
+        std::vector<std::uint8_t> out;
+
+        // K1, K2, K1 on one object: each matches its fresh reference
+        cipher.Encrypt(out, k1, nonce, ad, pt);
+        CHECK(out == c1);
+        out.clear();
+        cipher.Encrypt(out, k2, nonce, ad, pt);
+        CHECK(out == c2);
+        out.clear();
+        cipher.Encrypt(out, k1, nonce, ad, pt);
+        CHECK(out == c1);
+        out.clear();
+
+        // Decrypt with K2 right after encrypting with K1
+        cipher.Decrypt(out, k2, nonce, ad, c2);
+        CHECK(out == pt);
+        out.clear();
+        // Decrypt with K1 twice in a row, then K2 on the encrypt side
+        cipher.Decrypt(out, k1, nonce, ad, c1);
+        CHECK(out == pt);
+        out.clear();
+        cipher.Decrypt(out, k1, nonce, ad, c1);
+        CHECK(out == pt);
+        out.clear();
+        cipher.Encrypt(out, k2, nonce, ad, pt);
+        CHECK(out == c2);
+        out.clear();
+
+        // A copy of a used cipher (last key K2), given K1
+        Cipher copy(cipher);
+        copy.Encrypt(out, k1, nonce, ad, pt);
+        CHECK(out == c1);
+        out.clear();
+        copy.Decrypt(out, k2, nonce, ad, c2);
+        CHECK(out == pt);
+        out.clear();
+        // The original is unaffected by the copy
+        cipher.Encrypt(out, k2, nonce, ad, pt);
+        CHECK(out == c2);
+        out.clear();
+        cipher.Encrypt(out, k1, nonce, ad, pt);
+        CHECK(out == c1);
+        out.clear();
+
+        // A moved-to cipher (the source last used K2)
+        Cipher moved(std::move(copy));
+        moved.Encrypt(out, k2, nonce, ad, pt);
+        CHECK(out == c2);
+        out.clear();
+        moved.Encrypt(out, k1, nonce, ad, pt);
+        CHECK(out == c1);
+        out.clear();
+
+        // After Reset(), K1 still works
+        cipher.Reset();
+        cipher.Encrypt(out, k1, nonce, ad, pt);
+        CHECK(out == c1);
+        out.clear();
+        cipher.Decrypt(out, k1, nonce, ad, c1);
+        CHECK(out == pt);
+        out.clear();
+
+        // A wrong-length key is a NoiseError and leaves dst unchanged
+        const std::vector<std::uint8_t> shortKey(31, 0x33);
+        const std::vector<std::uint8_t> longKey(33, 0x33);
+        std::vector<std::uint8_t> dst = {0xde, 0xad};
+        const auto before = dst;
+        CHECK_THROWS_AS(cipher.Encrypt(dst, shortKey, nonce, ad, pt), NoiseError);
+        CHECK(dst == before);
+        CHECK_THROWS_AS(cipher.Encrypt(dst, longKey, nonce, ad, pt), NoiseError);
+        CHECK(dst == before);
+        CHECK_THROWS_AS(cipher.Decrypt(dst, shortKey, nonce, ad, c1), NoiseError);
+        CHECK(dst == before);
+        // and the object still encrypts correctly with K1 and K2 afterwards
+        cipher.Encrypt(out, k1, nonce, ad, pt);
+        CHECK(out == c1);
+        out.clear();
+        cipher.Encrypt(out, k2, nonce, ad, pt);
+        CHECK(out == c2);
+    }
 }
 
 // Main function for Catch2

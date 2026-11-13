@@ -19,7 +19,7 @@
 //
 
 //
-// Pattern Validation Tests using Catch2 v3.11
+// Pattern Validation Tests using Catch2 v3
 //
 
 #include <catch2/catch_test_macros.hpp>
@@ -44,4 +44,25 @@ TEST_CASE("Built-in Pattern Validity", "[pattern][validity]") {
             REQUIRE(result.has_value());
         }
     }
+}
+
+TEST_CASE("Pattern - isOneWay matches the message count", "[pattern][oneway]") {
+    // Every registered pattern: the flag agrees with the message count (Noise spec Section 7.4)
+    for (const auto& [name, pattern] : GetPatternRegistry()) {
+        INFO(name);
+        CHECK(pattern.isOneWay == (pattern.messages.size() == 1));
+    }
+
+    // IsValid rejects a flag that disagrees with the message count, in both directions
+    HandshakePattern twoWayFlaggedOneWay = NN;
+    twoWayFlaggedOneWay.isOneWay = true;
+    const auto nnResult = HandshakePattern::IsValid(twoWayFlaggedOneWay);
+    REQUIRE_FALSE(nnResult.has_value());
+    CHECK(nnResult.error() == "isOneWay does not match the message count");
+
+    HandshakePattern oneWayUnflagged = N;
+    oneWayUnflagged.isOneWay = false;
+    const auto nResult = HandshakePattern::IsValid(oneWayUnflagged);
+    REQUIRE_FALSE(nResult.has_value());
+    CHECK(nResult.error() == "isOneWay does not match the message count");
 }

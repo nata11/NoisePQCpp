@@ -30,7 +30,8 @@ export namespace Noise
      *
      * Classical tokens (e, s, ee, es, se, ss) are defined by the Noise spec Section 7.
      * PQ tokens (ekem, skem) are defined by the PQNoise paper for post-quantum KEM.
-     * HFS tokens (e1, ekem1) are defined by noise-kem-hfs.pdf for hybrid forward secrecy.
+     * HFS tokens (e1, ekem1) are defined by the Noise Protocol HFS spec extension for
+     * hybrid forward secrecy.
      */
     enum class Token : std::uint8_t {
         Token_invalid,  ///< Invalid/sentinel token.
@@ -42,8 +43,8 @@ export namespace Noise
         Token_ss,       ///< DH(s, rs) — static-static key agreement.
         Token_ekem,     ///< PQNoise: KEM encapsulation to peer's ephemeral key (ML-KEM).
         Token_skem,     ///< PQNoise: KEM encapsulation to peer's static key (ML-KEM).
-        Token_e1,       ///< HFS: Generate and send KEM ephemeral public key (noise-kem-hfs.pdf).
-        Token_ekem1,    ///< HFS: KEM encapsulation to peer's e1 key (noise-kem-hfs.pdf).
+        Token_e1,       ///< HFS: Generate and send KEM ephemeral public key (Noise Protocol HFS spec extension).
+        Token_ekem1,    ///< HFS: KEM encapsulation to peer's e1 key (Noise Protocol HFS spec extension).
         Token_psk       ///< Mix pre-shared symmetric key (Noise spec Section 9).
     };
 
@@ -77,7 +78,7 @@ export namespace Noise
      * (pre-messages), and what operations occur in each message exchange. Supports
      * classical patterns (Noise spec Sections 7-8), PSK patterns (Section 9),
      * post-quantum patterns (PQNoise paper), and hybrid forward secrecy patterns
-     * (noise-kem-hfs.pdf).
+     * (Noise Protocol HFS spec extension).
      *
      * Pattern validity rules are enforced by IsValid() per Noise spec Section 7.3.
      */
@@ -87,7 +88,7 @@ export namespace Noise
         std::vector<Token> pre_initiator;       ///< Initiator's pre-message tokens (e.g., {s} for K patterns).
         std::vector<Token> pre_responder;       ///< Responder's pre-message tokens (e.g., {s} for NK patterns).
         std::vector<MessagePattern> messages;   ///< Ordered handshake message sequences.
-        bool isOneWay{false};                   ///< True for one-way patterns (N, K, X).
+        bool isOneWay{false};                   ///< True for one-way patterns (N, K, X, pqN).
         std::uint8_t numPSKs{};                 ///< Number of pre-shared keys required.
 
         [[nodiscard]] std::string_view String() const {
@@ -145,7 +146,7 @@ export namespace Noise
         /// @name Pattern Validation (Noise spec Section 7.3)
         /// @{
 
-        /** @return True if the pattern has only one message (one-way: N, K, X). */
+        /** @return True if the pattern has only one message (one-way: N, K, X, pqN). */
         static constexpr bool IsOneWay(const HandshakePattern& pattern) {
             return pattern.messages.size() == 1;
         }
@@ -215,8 +216,8 @@ export namespace Noise
             if (messages.empty()) {
                 return std::unexpected("no handshake messages");
             }
-            if (IsOneWay(pa) && messages.size() != 1) {
-                return std::unexpected("excessive messages for one-way pattern");
+            if (pa.isOneWay != (messages.size() == 1)) {
+                return std::unexpected("isOneWay does not match the message count");
             }
 
             int numDHs = 0;
@@ -261,7 +262,7 @@ export namespace Noise
                         break;
                     case Token_ekem:
                     case Token_skem:
-                        // KEM operations (NoisePQC++): Each party can perform ekem/skem once
+                        // KEM operations (PQNoise): Each party can perform ekem/skem once
                         // Unlike DH, KEM is directional - each party encapsulates TO the other
                         // So initiator can do ekem AND responder can do ekem (different operations)
                         if (m.contains(v)) {
@@ -272,7 +273,7 @@ export namespace Noise
                         break;
                     case Token_ekem1:
                         // HFS: ekem1 can only appear once per handshake (global, not per-party)
-                        // Unlike NoisePQC++ ekem/skem, there's only one ekem1 operation
+                        // Unlike the PQNoise ekem/skem, there's only one ekem1 operation
                         if (inEither(v)) {
                             return std::unexpected(std::format("redundant HFS KEM operation: {}",
                                                                to_string(v)));
@@ -441,7 +442,7 @@ export namespace Noise
 
     /**
      * Transforms a classical pattern into an HFS (Hybrid Forward Secrecy) variant
-     * by inserting e1/ekem1 tokens per noise-kem-hfs.pdf.
+     * by inserting e1/ekem1 tokens per the Noise Protocol HFS spec extension.
      *
      * Transformation rules:
      * 1. Insert 'e1' after the first 'e' token. If a DH operation exists in the same
@@ -523,14 +524,17 @@ export namespace Noise
             throw NoiseError("Invalid PSK modifier: " + std::string(modifier));
         }
 
+        // The index is 1-3 decimal digits and nothing else ("psk1x" is rejected).
         const auto index_str = modifier.substr(prefix.size());
-        int pskIndex = 0;
-        auto [ptr, ec] = std::from_chars(index_str.data(), index_str.data() + index_str.size(), pskIndex);
-        if (ec != std::errc()) {
+        const auto is_digit = [](const char c) { return c >= '0' && c <= '9'; };
+        if (index_str.empty() || index_str.size() > 3 || !std::ranges::all_of(index_str, is_digit)) {
             throw NoiseError("Failed to parse PSK index: " + std::string(modifier));
         }
+        const std::size_t pskIndex = std::ranges::fold_left(
+            index_str, std::size_t{0},
+            [](const std::size_t acc, const char c) { return acc * 10 + static_cast<std::size_t>(c - '0'); });
 
-        if (pskIndex < 0 || pskIndex > static_cast<int>(templatePattern.messages.size())) {
+        if (pskIndex > templatePattern.messages.size()) {
             throw NoiseError(std::format("Invalid PSK index {} for pattern {} with {} messages",
                                          pskIndex, templatePattern.m_patternName,
                                          templatePattern.messages.size()));
@@ -543,8 +547,7 @@ export namespace Noise
             result.messages[0].tokens.insert(result.messages[0].tokens.begin(), Token_psk);
         }
         else {
-            const std::size_t idx = pskIndex - 1;
-            result.messages[idx].tokens.push_back(Token_psk);
+            result.messages[pskIndex - 1].tokens.push_back(Token_psk);
         }
 
         result.numPSKs = 1;
@@ -1056,7 +1059,7 @@ export namespace Noise
         }
     };
 
-    // pqKK: Mutual pre-shared key authentication (both keys known)
+    // pqKK: Mutual authentication with pre-known static keys
     // -> s
     // <- s
     // ...
@@ -1133,7 +1136,8 @@ export namespace Noise
         {Token_s},
         {
             {{Token_skem}}
-        }
+        },
+        true
     };
 
     // pqNX: No auth initiator, responder sends static
@@ -1230,14 +1234,15 @@ export namespace Noise
 
     /// @}
 
-    /// Expected number of patterns in the registry (base + deferred + PSK + PQ + HFS).
-    constexpr std::size_t EXPECTED_PATTERN_COUNT = 110;
+    /// Capacity reserved for the registry (a reserve() hint; the registry holds 107 patterns).
+    constexpr std::size_t EXPECTED_PATTERN_COUNT = 107;
 
     /**
      * Creates the complete pattern registry containing all supported handshake patterns.
      *
-     * Includes 57 classical patterns (one-way, fundamental, deferred), 13 PQ patterns,
-     * 18 PSK variants, and 35 HFS variants. PSK and HFS patterns are created dynamically
+     * Includes 59 classical patterns (3 one-way + 12 interactive + 23 deferred + 21 PSK),
+     * 13 PQ patterns (1 one-way + 12 interactive) and 35 HFS patterns (12 interactive + 23
+     * deferred), 107 in all. PSK and HFS patterns are created dynamically
      * via MakePSK() and ApplyHFSModifier() to avoid static initialization order issues.
      *
      * @return Map from pattern name string to HandshakePattern definition.
@@ -1290,10 +1295,10 @@ export namespace Noise
         registry.emplace(IX1.m_patternName, IX1);
         registry.emplace(I1X1.m_patternName, I1X1);
 
-        // Post-Quantum (NoisePQC++) patterns - One-way
+        // Post-Quantum (PQNoise) patterns - One-way
         registry.emplace(pqN.m_patternName, pqN);
 
-        // Post-Quantum (NoisePQC++) patterns - Interactive
+        // Post-Quantum (PQNoise) patterns - Interactive
         registry.emplace(pqNN.m_patternName, pqNN);
         registry.emplace(pqNK.m_patternName, pqNK);
         registry.emplace(pqNX.m_patternName, pqNX);

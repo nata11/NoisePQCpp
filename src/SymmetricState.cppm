@@ -32,22 +32,7 @@ import :errors;
 
 export namespace Noise
 {
-    /**
-     * Zero-copy HKDF result container.
-     *
-     * Holds a single contiguous secure buffer with span views into each
-     * HKDF output segment, avoiding separate allocations per output.
-     */
-    struct HkdfResult {
-        Botan::secure_vector<std::uint8_t> buffer;  ///< Contiguous HKDF output buffer.
-        std::array<std::span<const std::uint8_t>, 3> outputs;  ///< Span views into buffer segments.
-        std::size_t count;  ///< Number of valid outputs (2 or 3).
-
-        /** @return Span view of the i-th HKDF output. */
-        [[nodiscard]] std::span<const std::uint8_t> operator[](const std::size_t i) const {
-            return outputs[i];
-        }
-    };
+    class HandshakeState; // Forward declaration (friend, for ScrubHkdfState)
 
     /**
      * Manages the handshake's chaining key and hash state (Noise spec Section 5.2).
@@ -55,7 +40,11 @@ export namespace Noise
      * Encapsulates the symmetric cryptographic operations that underlie the Noise
      * handshake: MixKey, MixHash, MixKeyAndHash, EncryptAndHash, DecryptAndHash,
      * and Split. This class is algorithm-agnostic — it treats DH and KEM outputs
-     * uniformly as input keying material for HKDF.
+     * uniformly as input keying material for HKDF, which it computes itself as Noise spec
+     * Section 4.3 writes it, with one HMAC object owned by the state.
+     *
+     * A moved-from SymmetricState may only be destroyed: its hash and HMAC objects have been
+     * taken, and copying it throws NoiseError.
      *
      * @see Noise spec Section 5.2 (The SymmetricState object)
      */
@@ -66,14 +55,30 @@ export namespace Noise
         std::vector<std::uint8_t> h;    ///< Handshake hash (HASHLEN bytes).
         std::size_t hashLen{0};         ///< Hash output length (32 for SHA-256/BLAKE2s, 64 for SHA-512/BLAKE2b).
 
+        /**
+         * @param cipher Builds the embedded CipherState (not retained).
+         * @param hash Its Botan hash is cloned; this state owns the clone, so the Protocol's
+         *        Hash is never mutated by a handshake and one Protocol can serve many threads.
+         */
         SymmetricState(const Cipher& cipher, const Hash& hash)
             : cs{cipher, NOISE_MAX_MESSAGE_SIZE},
               hashLen{hash.hash_function->output_length()},
-              cipher{cipher},
-              hash{hash} {}
+              m_hash{hash.hash_function->new_object()},
+              m_hmac{CreateHmac(*m_hash)} {
+            ReserveHkdfBuffers();
+        }
 
-        // Copy constructor
-        SymmetricState(const SymmetricState&) = default;
+        /** Copy constructor. The copy owns a fresh hash clone and a fresh, unkeyed HMAC (every MixHash ends in final() and every derivation re-keys, so there is no in-flight state).
+         *  @throws NoiseError If other has been moved from. */
+        SymmetricState(const SymmetricState& other)
+            : cs{other.cs},
+              ck{other.ck},
+              h{other.h},
+              hashLen{other.hashLen},
+              m_hash{LiveHash(other).new_object()},
+              m_hmac{other.m_hmac->new_object()} {
+            ReserveHkdfBuffers();
+        }
 
         // Move constructor
         SymmetricState(SymmetricState&& other) noexcept
@@ -81,8 +86,15 @@ export namespace Noise
               ck{std::move(other.ck)},
               h{std::move(other.h)},
               hashLen{other.hashLen},
-              cipher{other.cipher},
-              hash{other.hash} {}
+              m_hash{std::move(other.m_hash)},
+              m_hmac{std::move(other.m_hmac)},
+              m_hkdfOut{std::move(other.m_hkdfOut)},
+              m_tempKey{std::move(other.m_tempKey)} {}
+
+        /** Destructor. Scrubs the chaining key; h is public transcript data and is left alone. */
+        ~SymmetricState() {
+            Botan::secure_scrub_memory(ck);
+        }
 
         SymmetricState& operator=(const SymmetricState&) = delete;
 
@@ -96,21 +108,21 @@ export namespace Noise
          * key ck is initialized to h, and the CipherState is initialized with an
          * empty (all-zero) key.
          *
-         * @param protocolName The ASCII-encoded Noise protocol name string.
+         * @param protocolName The Noise protocol name (ASCII text, Noise spec Section 8).
          */
-        void InitializeSymmetric(std::span<const std::uint8_t> protocolName) {
-            h = std::vector<std::uint8_t>(hashLen, 0);
+        void InitializeSymmetric(const std::string_view protocolName) {
+            h.assign(hashLen, 0);
             if (protocolName.size() <= hashLen) {
-                std::ranges::copy(protocolName, h.begin());
+                std::ranges::transform(protocolName, h.begin(),
+                                       [](const char c) { return static_cast<std::uint8_t>(c); });
             }
             else {
-                const auto hash_result = hash.hash_function->process(protocolName);
-                std::ranges::copy(hash_result, h.begin());
+                m_hash->update(protocolName);  // in place, as MixHash does: no temporary from process()
+                m_hash->final(h);
             }
             ck = h;
-            // Initialize cipher state with zero-filled key (32 bytes)
-            std::array<std::uint8_t, 32> zero_key{};
-            cs.InitializeKey(zero_key);
+            std::array<std::uint8_t, SYMMETRIC_KEY_SIZE> zero_key{};
+            cs.InitializeKey(zero_key);  // k = empty: an all-zero key means "no key" (HasKey())
         }
 
         /**
@@ -123,24 +135,22 @@ export namespace Noise
          * @param input_km DH shared secret or KEM shared secret bytes.
          */
         void MixKey(const std::span<const std::uint8_t> input_km) {
-            auto result = HkdfExpand(ck, input_km, hash.hash_function->name(), hashLen, 2);
+            Hkdf(input_km, 2);
 
-            // result[0] = new_ck, result[1] = temp_k (spans into contiguous buffer)
-            ck.assign(result[0].begin(), result[0].end());
+            // out1 = new ck, out2 = temp_k (truncated to 32 bytes when HASHLEN is 64)
+            const std::span<const std::uint8_t> out{m_hkdfOut};
+            const auto newCk = out.first(hashLen);
+            ck.assign(newCk.begin(), newCk.end());
+            cs.InitializeKey(out.subspan(hashLen, hashLen).first(SYMMETRIC_KEY_SIZE));
 
-            // Truncate temp_k to 32 bytes if HASHLEN=64
-            if (hashLen != 32 && hashLen != 64) [[unlikely]]
-                ThrowNoiseError("Noise expects HASHLEN 32 or 64");
-
-            const auto temp_k = result[1].subspan(0, SYMMETRIC_KEY_SIZE);
-            cs.InitializeKey(temp_k);
+            ScrubHkdfBuffers();
         }
 
         /** Sets h = HASH(h || data), binding data into the handshake transcript (Noise spec Section 5.2). */
         void MixHash(const std::span<const std::uint8_t> data) {
-            hash.hash_function->update(h);
-            hash.hash_function->update(data);
-            hash.hash_function->final(h);
+            m_hash->update(h);
+            m_hash->update(data);
+            m_hash->final(h);
         }
 
         /**
@@ -154,19 +164,17 @@ export namespace Noise
          */
         void MixKeyAndHash(const std::span<const std::uint8_t> input_km) {
             // (ck, temp_h, temp_k) = HKDF(ck, ikm, 3)
-            auto result = HkdfExpand(ck, input_km, hash.hash_function->name(), hashLen, 3);
+            Hkdf(input_km, 3);
 
-            // result[0] = new_ck, result[1] = temp_h, result[2] = temp_k (spans into contiguous buffer)
-            // h = HASH(h || temp_h)
-            MixHash(result[1]);
+            // out1 = new ck, out2 = temp_h, out3 = temp_k (truncated to 32 bytes when HASHLEN is 64)
+            const std::span<const std::uint8_t> out{m_hkdfOut};
+            MixHash(out.subspan(hashLen, hashLen));   // h = HASH(h || temp_h)
 
-            // Truncate temp_k to 32 bytes if HASHLEN=64
-            if (hashLen != 32 && hashLen != 64) [[unlikely]]
-                ThrowNoiseError("Noise expects HASHLEN 32 or 64");
+            const auto newCk = out.first(hashLen);
+            ck.assign(newCk.begin(), newCk.end());
+            cs.InitializeKey(out.subspan(2 * hashLen, hashLen).first(SYMMETRIC_KEY_SIZE));
 
-            ck.assign(result[0].begin(), result[0].end());
-            const auto temp_k = result[2].subspan(0, SYMMETRIC_KEY_SIZE);
-            cs.InitializeKey(temp_k);
+            ScrubHkdfBuffers();
         }
 
         /**
@@ -188,37 +196,29 @@ export namespace Noise
             cs.EncryptWithAd(dst, h, plaintext);
 
             // Mix ONLY the newly added ciphertext portion into hash
-            const auto start = std::next(dst.begin(), static_cast<std::ptrdiff_t>(ciphertextOff));
-            const std::span<const std::uint8_t> newCiphertext(start, dst.end());
+            const auto newCiphertext = std::span{dst}.subspan(ciphertextOff);
 
             MixHash(newCiphertext);
         }
 
         /**
-         * Mixes ciphertext into h, then decrypts and appends plaintext to dst
-         * (Noise spec Section 5.2 DecryptAndHash).
+         * Decrypts ciphertext with the current h as associated data, appends the plaintext to
+         * dst, then mixes the ciphertext into h (Noise spec Section 5.2 DecryptAndHash:
+         * `plaintext = DecryptWithAd(h, ciphertext); MixHash(ciphertext)`).
          *
-         * The ordering is critical for correctness: MixHash(ciphertext) must happen
-         * BEFORE decryption to maintain transcript consistency with the sender's
-         * EncryptAndHash. However, decryption needs the hash state from BEFORE mixing
-         * as the AEAD associated data. Therefore we save a copy of h, mix, then
-         * decrypt using the saved copy.
+         * This is the sender's EncryptAndHash in mirror image: both use the pre-mix h as AD
+         * and both mix the same ciphertext afterwards, so the transcripts agree. No copy of h
+         * is needed because dst and ciphertext never alias in this library (every caller
+         * passes a fresh vector and a span into the received message); the earlier
+         * copy-then-mix-then-decrypt form produced the same bytes, which the vectors pin.
          *
          * @param[in,out] dst Buffer to append decrypted plaintext to.
          * @param[in] ciphertext AEAD ciphertext (with tag) to decrypt.
          */
         void DecryptAndHash(std::vector<std::uint8_t>& dst,
                             const std::span<const std::uint8_t> ciphertext) {
-
-            // Save h BEFORE mixing — needed as AD for decryption, while the
-            // transcript must reflect the post-mix state for consistency with the sender.
-            std::vector<std::uint8_t> hPrev(h.begin(), h.end());
-
-            // Mix ciphertext into transcript BEFORE decryption (Noise spec ordering).
+            cs.DecryptWithAd(dst, h, ciphertext);
             MixHash(ciphertext);
-
-            // Decrypt using the pre-mix h as AD, matching the sender's EncryptAndHash.
-            cs.DecryptWithAd(dst, hPrev, ciphertext);
         }
 
         /** @return The current handshake hash h (for channel binding after completion). */
@@ -236,54 +236,99 @@ export namespace Noise
          * @return Pair of transport CipherStates (cs1, cs2).
          */
         [[nodiscard]] std::pair<CipherState, CipherState> Split() const {
-            auto result = HkdfExpand(ck, {}, hash.hash_function->name(), hashLen, 2);
+            Hkdf({}, 2);
 
-            // Truncate to 32 bytes if HASHLEN=64
-            if (hashLen != 32 && hashLen != 64) [[unlikely]]
-                ThrowNoiseError("Noise expects HASHLEN 32 or 64");
+            // k1, k2 = the first 32 bytes of out1 and out2 (truncated when HASHLEN is 64)
+            const std::span<const std::uint8_t> out{m_hkdfOut};
+            // Built in place and returned by NRVO: two CipherState copies (of cs), not four.
+            std::pair<CipherState, CipherState> pair{cs, cs};
+            pair.first.InitializeKey(out.first(hashLen).first(SYMMETRIC_KEY_SIZE));
+            pair.second.InitializeKey(out.subspan(hashLen, hashLen).first(SYMMETRIC_KEY_SIZE));
 
-            const auto k1 = result[0].subspan(0, SYMMETRIC_KEY_SIZE);
-            const auto k2 = result[1].subspan(0, SYMMETRIC_KEY_SIZE);
-
-            CipherState c1{cs}, c2{cs};
-            c1.InitializeKey(k1);
-            c2.InitializeKey(k2);
-            return {c1, c2};
+            ScrubHkdfBuffers();
+            return pair;
         }
 
     private:
-        const Cipher& cipher;
-        const Hash& hash;
+        friend class HandshakeState;   ///< For ScrubHkdfState() in HandshakeState::Reset().
+
+        std::unique_ptr<Botan::HashFunction> m_hash;  ///< This state's own hash (a clone of the Protocol's; never shared).
+        /// One HMAC over the same hash, created once; every derivation re-keys it (Noise spec Section 4.3 HKDF).
+        /// mutable, with the two buffers below, because Split() is const and uses them as scratch.
+        mutable std::unique_ptr<Botan::MessageAuthenticationCode> m_hmac;
+        mutable Botan::secure_vector<std::uint8_t> m_hkdfOut;   ///< HKDF outputs, contiguous; reserved to 3 * HASHLEN.
+        mutable Botan::secure_vector<std::uint8_t> m_tempKey;   ///< HKDF temp key (the PRK); reserved to HASHLEN.
+
+        /** The source's hash object for the copy constructor; a moved-from source throws instead of a null dereference. */
+        static const Botan::HashFunction& LiveHash(const SymmetricState& other) {
+            if (!other.m_hash || !other.m_hmac) [[unlikely]] {
+                throw NoiseError("noisepqc++/SymmetricState: copy of a moved-from state");
+            }
+            return *other.m_hash;
+        }
+
+        /** Builds the HMAC for the state's hash; Botan failures become NoiseError (cannot fail for the four Noise hashes). */
+        static std::unique_ptr<Botan::MessageAuthenticationCode> CreateHmac(const Botan::HashFunction& hash) {
+            try {
+                return Botan::MessageAuthenticationCode::create_or_throw("HMAC(" + hash.name() + ")");
+            }
+            catch (const Botan::Exception& e) {
+                // Botan types never escape the library (NoiseError model)
+                throw NoiseError(std::string("noisepqc++/SymmetricState: ") + e.what());
+            }
+        }
+
+        /** Reserves the HKDF scratch buffers so that no derivation allocates in steady state. */
+        void ReserveHkdfBuffers() {
+            m_hkdfOut.reserve(3 * hashLen);
+            m_tempKey.reserve(hashLen);
+        }
 
         /**
-         * Performs HKDF key derivation with zero-copy output via span views (RFC 5869).
+         * HKDF exactly as Noise spec Section 4.3 writes it, with ck as the HMAC key:
+         *   temp = HMAC(ck, ikm); out1 = HMAC(temp, 0x01); out2 = HMAC(temp, out1 || 0x02);
+         *   out3 = HMAC(temp, out2 || 0x03) when outputs == 3.
+         * The outputs land contiguously in m_hkdfOut (outputs * HASHLEN bytes); the 0x0i byte is
+         * fed with update(uint8_t), not by concatenation. No allocation in steady state.
          *
-         * @param salt_ck The chaining key used as HKDF salt.
-         * @param input_km Input keying material (DH/KEM shared secret, or empty for Split).
-         * @param hash_name Botan hash algorithm name (e.g., "SHA-256").
-         * @param hash_len Output length per segment (HASHLEN).
-         * @param num_outputs Number of output segments (2 or 3).
-         * @return HkdfResult with span views into a contiguous secure buffer.
+         * @param ikm Input keying material (DH/KEM shared secret, PSK, or empty for Split).
+         * @param outputs 2 or 3.
          */
-        static HkdfResult HkdfExpand(const std::span<const std::uint8_t> salt_ck,
-                                      const std::span<const std::uint8_t> input_km,
-                                      const std::string& hash_name,
-                                      const std::size_t hash_len,
-                                      const std::size_t num_outputs) {
-            const auto kdf = Botan::KDF::create_or_throw("HKDF(" + hash_name + ")");
-            const std::size_t total = hash_len * num_outputs;
+        void Hkdf(const std::span<const std::uint8_t> ikm, const std::size_t outputs) const {
+            m_tempKey.resize(hashLen);
+            m_hmac->set_key(ck);
+            m_hmac->update(ikm);
+            m_hmac->final(m_tempKey);
 
-            HkdfResult result;
-            result.buffer = kdf->derive_key(total, input_km, salt_ck, {});
-            result.count = num_outputs;
-
-            // Create spans (views) into the contiguous buffer - zero copy
-            for (std::size_t i = 0; i < num_outputs; ++i) {
-                const auto start = result.buffer.data() + (i * hash_len);
-                result.outputs[i] = std::span<const std::uint8_t>(start, hash_len);
+            m_hkdfOut.resize(outputs * hashLen);
+            const std::span<std::uint8_t> out{m_hkdfOut};
+            m_hmac->set_key(m_tempKey);
+            m_hmac->update(std::uint8_t{0x01});
+            m_hmac->final(out.first(hashLen));
+            for (std::size_t i = 1; i < outputs; ++i) {
+                m_hmac->update(out.subspan((i - 1) * hashLen, hashLen));
+                m_hmac->update(static_cast<std::uint8_t>(i + 1));
+                m_hmac->final(out.subspan(i * hashLen, hashLen));
             }
+        }
 
-            return result;
+        /** Scrubs the HKDF outputs and the temp key after a derivation (capacity is kept). */
+        void ScrubHkdfBuffers() const {
+            Botan::secure_scrub_memory(m_hkdfOut);
+            m_hkdfOut.clear();
+            Botan::secure_scrub_memory(m_tempKey);
+            m_tempKey.clear();
+        }
+
+        /**
+         * Clears the HMAC's keyed state (the pads derived from the last temp key; after Split
+         * that is the PRK of both transport keys) and scrubs the HKDF buffers. Called from
+         * HandshakeState::Reset(); the destructor needs nothing extra, because Botan zeroizes
+         * its secure_vectors on destruction.
+         */
+        void ScrubHkdfState() const {
+            m_hmac->clear();
+            ScrubHkdfBuffers();
         }
     };
 }

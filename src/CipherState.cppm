@@ -51,7 +51,7 @@ export namespace Noise
         std::array<std::uint8_t, SYMMETRIC_KEY_SIZE> key{};     ///< 32-byte symmetric key (zero = no key).
         std::uint64_t nonce{0};                                 ///< 64-bit nonce counter.
         std::size_t aeadOverhead{0};                            ///< AEAD tag size in bytes (16).
-        std::uint32_t maxMessageSize{0};                        ///< Maximum plaintext message size.
+        std::uint32_t maxMessageSize{0};                        ///< Maximum message (ciphertext) size in bytes; 0 = unchecked.
         /**
          * Tracks the plaintext→encrypted state transition.
          * Set to true after the first non-zero key is loaded, ensuring the
@@ -59,9 +59,9 @@ export namespace Noise
          */
         bool hadKeyBefore{false};
 
-        CipherState(Cipher cipher, const std::uint32_t maxMessageSize)
-            : cipher{std::move(cipher)}, maxMessageSize{maxMessageSize} {
-            aeadOverhead = this->cipher.GetAeadTagSize();
+        CipherState(Cipher aead, const std::uint32_t maxSize)
+            : cipher{std::move(aead)}, maxMessageSize{maxSize} {
+            aeadOverhead = cipher.GetAeadTagSize();
         }
 
         // Copy constructor
@@ -70,22 +70,42 @@ export namespace Noise
         // Move constructor
         CipherState(CipherState&& other) noexcept = default;
 
+        /**
+         * Destructor. Scrubs the key with Botan::secure_scrub_memory. A moved-from CipherState
+         * still holds its copy of the key (std::array moves copy), so it is scrubbed here too.
+         */
+        ~CipherState() {
+            Botan::secure_scrub_memory(key);
+        }
+
         CipherState& operator=(const CipherState&) = delete;
         CipherState& operator=(CipherState&&) = delete;
 
-        /** Derives a new key from the current key via HKDF (Noise spec Section 5.1 Rekey). */
-        void Rekey(const std::string_view hash_algo = "HKDF(SHA-256)") {
-
+        /**
+         * Replaces the key with REKEY(k) = ENCRYPT(k, 2^64-1, zerolen, zeros) truncated to
+         * 32 bytes (Noise spec Section 4.2, the default REKEY). The nonce is unchanged. Does
+         * nothing when no key is set. The temporary ciphertext is scrubbed on every path.
+         *
+         * @throws NoiseError If the cipher backend fails; the key is unchanged.
+         */
+        void Rekey() {
             if (!HasKey()) return;
-            // Per Noise spec: REKEY(k) = ENCRYPT(k, maxnonce, zeros, zeros)
-            // Using HKDF as a more standard approach for key derivation
-            const auto kdf = Botan::KDF::create_or_throw(hash_algo);
 
-            // ReSharper disable once CppVariableCanBeMadeConstexpr
-            const std::vector<std::uint8_t> salt{};
-            const auto new_key = kdf->derive_key<SYMMETRIC_KEY_SIZE>(key, salt, "noise-rekey");
-            Botan::secure_scrub_memory(key);
-            key = new_key;
+            // Cipher::Encrypt, not EncryptWithAd: REKEY uses the reserved nonce 2^64-1, which
+            // EncryptWithAd rightly rejects with NonceExhaustedError.
+            std::vector<std::uint8_t> tmp;
+            tmp.reserve(SYMMETRIC_KEY_SIZE + aeadOverhead);   // never reallocates
+            const struct ScrubOnExit {
+                std::vector<std::uint8_t>& bytes;
+                ~ScrubOnExit() {
+                    bytes.resize(bytes.capacity());   // cover anything written past size()
+                    Botan::secure_scrub_memory(bytes);
+                }
+            } scrub{tmp};
+
+            constexpr std::array<std::uint8_t, SYMMETRIC_KEY_SIZE> zeros{};
+            cipher.Encrypt(tmp, key, MAX_NONCE, {}, zeros);
+            std::ranges::copy_n(tmp.cbegin(), SYMMETRIC_KEY_SIZE, key.begin());
         }
 
         /** Securely scrubs the key and resets the cipher state. */
@@ -100,21 +120,21 @@ export namespace Noise
             return hasKey;
         }
 
-        void SetNonce(const std::uint64_t nonce) {
-            this->nonce = nonce;
+        void SetNonce(const std::uint64_t n) {
+            nonce = n;
         }
 
         /**
          * Sets the symmetric key and resets the nonce to zero (Noise spec Section 5.1).
-         * @param key Exactly 32 bytes of key material.
+         * @param newKey Exactly 32 bytes of key material.
          */
-        void InitializeKey(const std::span<const std::uint8_t> key) {
-            if (key.size() != SYMMETRIC_KEY_SIZE) {
+        void InitializeKey(const std::span<const std::uint8_t> newKey) {
+            if (newKey.size() != SYMMETRIC_KEY_SIZE) {
                 ThrowNoiseError("Key size must be 32 bytes");
             }
 
             const bool wasEmpty = !HasKey();
-            std::ranges::copy(key, this->key.begin());
+            std::ranges::copy(newKey, key.begin());
             nonce = 0;
             const bool isNowSet = HasKey();
 
@@ -147,13 +167,27 @@ export namespace Noise
 
     private:
 
-        /** Appends encrypted data to dst. If no key is set, passes plaintext through unchanged. */
+        /**
+         * Appends encrypted data to dst. If no key is set, passes plaintext through unchanged.
+         * @throws NonceExhaustedError If nonce == MAX_NONCE (the reserved value).
+         * @throws MessageSizeError If the resulting message would exceed maxMessageSize (when > 0).
+         * On any failure the nonce is unchanged.
+         */
         void EncryptWithAd(std::vector<std::uint8_t>& dst,
                           const std::span<const std::uint8_t> ad,
                           const std::span<const std::uint8_t> plaintext) {
-            if (nonce > MAX_NONCE) [[unlikely]] ThrowNoiseError("nonce > max nonce exceeded");
+            // Noise spec Section 5.1: 2^64-1 is reserved; using it is an error
+            if (nonce == MAX_NONCE) [[unlikely]] throw NonceExhaustedError{};
 
-            if (!HasKey()) [[unlikely]] {
+            const bool hasKey = HasKey();
+
+            // Noise spec Section 3: the message (ciphertext) is bounded by maxMessageSize
+            if (maxMessageSize > 0 &&
+                plaintext.size() + (hasKey ? aeadOverhead : 0) > maxMessageSize) [[unlikely]] {
+                throw MessageSizeError{};
+            }
+
+            if (!hasKey) [[unlikely]] {
                 dst.insert(dst.end(), plaintext.begin(), plaintext.end());
                 return;
             }
@@ -163,11 +197,23 @@ export namespace Noise
             nonce++;
         }
 
-        /** Appends decrypted data to dst. If no key is set, passes ciphertext through unchanged. */
+        /**
+         * Appends decrypted data to dst. If no key is set, passes ciphertext through unchanged.
+         * @throws NonceExhaustedError If nonce == MAX_NONCE (the reserved value).
+         * @throws MessageSizeError If ciphertext exceeds maxMessageSize (when > 0).
+         * @throws DecryptionError If the ciphertext is shorter than the tag or the tag does not verify.
+         * On any failure the nonce is unchanged.
+         */
         void DecryptWithAd(std::vector<std::uint8_t>& dst,
                           const std::span<const std::uint8_t> ad,
                           const std::span<const std::uint8_t> ciphertext) {
-            if (nonce > MAX_NONCE) [[unlikely]] ThrowNoiseError("nonce > max nonce exceeded");
+            // Noise spec Section 5.1: 2^64-1 is reserved; using it is an error
+            if (nonce == MAX_NONCE) [[unlikely]] throw NonceExhaustedError{};
+
+            // Noise spec Section 3: the message (ciphertext) is bounded by maxMessageSize
+            if (maxMessageSize > 0 && ciphertext.size() > maxMessageSize) [[unlikely]] {
+                throw MessageSizeError{};
+            }
 
             if (!HasKey()) [[unlikely]] {
                 dst.insert(dst.end(), ciphertext.begin(), ciphertext.end());

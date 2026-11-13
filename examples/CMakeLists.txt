@@ -41,3 +41,9 @@ target_link_libraries(mlkem_sandbox PRIVATE NoisePQC::noisepqc)
 # ASIO Networking Examples
 # ================================
 add_subdirectory(asio-networking)
+
+# Link-time optimization in Release configs (cmake/BuildConfig.cmake)
+foreach(TARGET_NAME dh_sandbox protocol_sandbox hs_sandbox pattern_zoo example_test
+        example_test_pq mlkem_sandbox)
+    noisepqc_optimize_target(${TARGET_NAME})
+endforeach()

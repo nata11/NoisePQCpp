@@ -3,7 +3,7 @@ FROM ubuntu:26.04
 LABEL org.opencontainers.image.source=https://github.com/nata11/NoisePQCpp
 LABEL org.opencontainers.image.description="NoisePQC++ build environment with Clang 21 on Ubuntu 26.04"
 LABEL org.opencontainers.image.title="NoisePQC++ Clang 21 Build Environment"
-LABEL org.opencontainers.image.version="1.0.0"
+LABEL org.opencontainers.image.version="1.1.0"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 ARG DEBIAN_FRONTEND=noninteractive
